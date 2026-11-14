@@ -161,6 +161,17 @@ def notebook_coverage(z: dict, before, agent_id: str = "learner") -> dict:
             "unfamiliar": [v for v in VARS if res[f"cov_{v}"] == 0]}
 
 
+def in_range_lessons(z: dict, before, agent_id: str = "learner") -> dict:
+    """{lesson_id: text} for every visible lesson in range on >= IN_RANGE_MIN variables (ignores text similarity)."""
+    rows = coll().aggregate([
+        {"$match": _notebook_filter(before, agent_id)},
+        {"$addFields": {"in_range": _in_range_count(z)}},
+        {"$match": {"in_range": {"$gte": IN_RANGE_MIN}}},
+        {"$project": {"text": 1}},
+    ])
+    return {str(r["_id"]): r["text"] for r in rows}
+
+
 def retrieve(z: dict, before, agent_id: str = "learner") -> dict:
     """One call per day: embed today's description, return what each agent type sees + coverage for the UI.
     z: today's z-scores keyed by variable name. before: window start (only lessons learned earlier are visible)."""
