@@ -99,3 +99,14 @@ def test_atlas_score_is_normalized_cosine():
     res = {r["text"]: r["score"] for r in _wait_for(lambda: _search(a, datetime(2013, 1, 1)), 2)}
     assert res["orthogonal"] == pytest.approx(0.5, abs=1e-4)
     assert res["cos0.5"] == pytest.approx(0.75, abs=1e-4)
+
+
+def test_recommendation_and_scoring():
+    from almanac.lessons import REC, rec_win
+    assert REC[("buy", "win")] == "IN" and REC[("buy", "loss")] == "OUT"
+    assert REC[("sell", "win")] == "OUT" and REC[("sell", "loss")] == "IN"
+    assert rec_win("IN", 0.01) == 1 and rec_win("IN", -0.01) == 0
+    assert rec_win("OUT", -0.01) == 1 and rec_win("OUT", 0.01) == 0
+    # a "buying here lost" warning (rec OUT) is right about its own birth trade
+    assert rec_win(REC[("buy", "loss")], -0.02) == 1
+    assert good(action="buy", outcome="loss")["rec"] == "IN"  # good() keeps make_lesson's buy/win rec

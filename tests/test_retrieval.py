@@ -66,17 +66,14 @@ def test_plain_gets_everything_that_sounds_like_today(today, seeded):
     assert scores == sorted(scores, reverse=True) and min(scores) >= config.ATLAS_SCORE_MIN
 
 
-def test_almanac_three_tier_gate(today, seeded):
-    """Only birth trades are evidence here. The lesson born at today's conditions is 'proven here'
-    (n_eff = 1, A = 2/3) and ranks first; lessons born 2+ z-units away are 'unproven here' (n_eff < 1),
-    still shown, ranked by similarity. Nothing is proven to fail, so nothing relevant is hidden."""
+def test_almanac_sees_only_lessons_proven_here(today, seeded):
+    """Only birth trades are evidence here. The lesson born at today's conditions is proven here
+    (n_eff = 1, A = 2/3); lessons born 2+ z-units away are unproven here (n_eff < 1) and left out."""
     r = retrieve(today, BEFORE, agent_id=AGENT)
-    assert r["almanac"][0]["text"] == "crash 8of8" and r["almanac"][0]["cls"] == 0
-    assert r["almanac"][0]["A"] == pytest.approx(2 / 3) and r["almanac"][0]["n_eff"] == pytest.approx(1.0)
-    assert set(names(r["almanac"])) == set(names(r["relevant"]))
-    rest = r["almanac"][1:]
-    assert all(x["cls"] == 2 for x in rest)
-    assert [x["score"] for x in rest] == sorted([x["score"] for x in rest], reverse=True)
+    assert names(r["almanac"]) == ["crash 8of8"]
+    x = r["almanac"][0]
+    assert x["cls"] == 0 and x["A"] == pytest.approx(2 / 3) and x["n_eff"] == pytest.approx(1.0)
+    assert all(y["cls"] == 2 for y in r["relevant"] if y["text"] != "crash 8of8")
 
 
 def test_retired_future_and_dissimilar_never_returned(today, seeded):

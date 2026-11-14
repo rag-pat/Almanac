@@ -25,7 +25,8 @@ from almanac.agent import decide
 from almanac.broker import Broker, find_due, outcomes, record_decision
 from almanac.data import _to_dt, features_until
 from almanac.features import VARS, describe
-from almanac.lessons import BOX, coll as lessons, evidence_entry, make_lesson, notebook_coverage, retrieve
+from almanac.lessons import (BOX, REC, coll as lessons, evidence_entry, make_lesson, notebook_coverage, rec_win,
+                             retrieve)
 from almanac.llm import cosine, embed, llm_json
 
 AGENT = config.LEARN_AGENT
@@ -44,7 +45,9 @@ def events():
     return db.db()["memory_events"]
 
 
-def write_lesson(o: dict) -> str:
+def lesson_prompt(o: dict) -> str:
+    """The user prompt the learner sends to write a lesson about resolved outcome `o` (also used to replay
+    lesson texts from the disk cache when rebuilding evidence)."""
     moved = "rose" if o["R"] > 0 else "fell"
     if o.get("kept"):
         did = "held and stayed fully invested" if o["action"] == "buy" else "held and stayed in cash"
@@ -55,7 +58,11 @@ def write_lesson(o: dict) -> str:
             f"its 200-day average.\n"
             f"You {did}. Over the next week the asset {moved} {abs(o['R']) * 100:.1f}%, "
             f"so the trade was a {o['outcome'].upper()}.\nWrite the lesson.")
-    return llm_json(LESSON_SYSTEM, user, LESSON_SCHEMA)["lesson"].strip()
+    return user
+
+
+def write_lesson(o: dict) -> str:
+    return llm_json(LESSON_SYSTEM, lesson_prompt(o), LESSON_SCHEMA)["lesson"].strip()
 
 
 def find_merge(emb: list[float], action: str, outcome: str):
@@ -84,12 +91,16 @@ def apply_outcome(o: dict, upd: dict, text: str, emb: list[float], merge_into, m
 
     def txn(s):
         outcomes().update_one({"_id": o["_id"]}, {"$set": upd}, session=s)
-        # 1. credit / blame the lessons this decision cited
+        # 1. score the lessons this decision cited: was each lesson's OWN recommendation right this time?
         for lid in o.get("cited", []):
+            cur = lessons().find_one({"_id": lid}, {"rec": 1, "action": 1, "outcome": 1}, session=s)
+            if cur is None:
+                continue
+            ok = rec_win(cur.get("rec") or REC[(cur["action"], cur["outcome"])], upd["R"])
             les = lessons().find_one_and_update(
-                {"_id": lid}, {"$inc": {"wins" if won else "losses": 1},
+                {"_id": lid}, {"$inc": {"wins" if ok else "losses": 1},
                                "$push": {"history": {"event": "cited", "date": sim, "outcome": upd["outcome"]},
-                                         "evidence": evidence_entry(upd["resolved_date"], fp, int(won))}},
+                                         "evidence": evidence_entry(upd["resolved_date"], fp, ok)}},
                 session=s, return_document=True)
             if les and les["status"] == "active" and should_retire(les["wins"], les["losses"]):
                 p = float(beta.cdf(0.5, 1 + les["wins"], 1 + les["losses"]))
@@ -107,10 +118,12 @@ def apply_outcome(o: dict, upd: dict, text: str, emb: list[float], merge_into, m
                 if lo < merge_into[f"lo_{v}"] or hi > merge_into[f"hi_{v}"]:
                     widened.append(v)
                 sets[f"lo_{v}"], sets[f"hi_{v}"] = lo, hi
+            ok = rec_win(REC[(o["action"], upd["outcome"])], upd["R"])  # same action+outcome as the lesson
             lessons().update_one({"_id": merge_into["_id"]},
-                                 {"$set": sets, "$inc": {"wins": 1},
+                                 {"$set": sets, "$inc": {"wins" if ok else "losses": 1},
                                   "$push": {"history": {"event": "widen", "date": sim, "cos": merge_cos,
-                                                        "vars": widened, "variant": text}}}, session=s)
+                                                        "vars": widened, "variant": text},
+                                            "evidence": evidence_entry(upd["resolved_date"], fp, ok)}}, session=s)
             events().insert_one({"type": "widen", "lesson_id": merge_into["_id"], "date": sim, "at": now,
                                  "vars": widened, "cos": merge_cos, "variant": text}, session=s)
             return merge_into["_id"], "widen"

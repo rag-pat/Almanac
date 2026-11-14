@@ -99,6 +99,7 @@ def make_lesson(text: str, embedding: list[float], fp: dict, action: str, outcom
         "fp": {v: float(fp[v]) for v in VARS},
         "action": action,
         "outcome": outcome,
+        "rec": REC[(action, outcome)],
         # record tracks the lesson's ADVICE: it was right about the trade it came from (even a "this lost" warning)
         "wins": 1,
         "losses": 0,
@@ -112,6 +113,16 @@ def make_lesson(text: str, embedding: list[float], fp: dict, action: str, outcom
         doc[f"lo_{v}"] = float(fp[v]) - BOX
         doc[f"hi_{v}"] = float(fp[v]) + BOX
     return doc
+
+
+# What a lesson recommends, from the trade it was written about (the lesson is phrased from that outcome):
+# "buying won" -> be IN, "buying lost" -> be OUT, "selling won" -> OUT, "selling lost" -> IN.
+REC = {("buy", "win"): "IN", ("buy", "loss"): "OUT", ("sell", "win"): "OUT", ("sell", "loss"): "IN"}
+
+
+def rec_win(rec: str, r: float) -> int:
+    """Was the lesson's recommendation right over that 5-day stretch? IN is right if the asset rose, OUT if not."""
+    return int(r > 0) if rec == "IN" else int(r <= 0)
 
 
 def evidence_entry(date, z: dict, win: int) -> dict:
@@ -191,8 +202,8 @@ def _class_expr() -> dict:
 def search(qvec: list[float], z: dict, before, almanac: bool, agent_id: str = "learner",
            cap: int = config.RETRIEVE_CAP) -> list[dict]:
     """Relevant lessons for today, in one pipeline. Plain: best similarity first.
-    almanac=True: hide only lessons proven to fail here (A < A_FAIL, n_eff >= NEFF_MIN); rank proven-here
-    first (by A), then mixed (by A), then unproven-here (by similarity). z = the gate's (smoothed) z-scores."""
+    almanac=True: only lessons proven here (A >= A_MIN and n_eff >= NEFF_MIN), ranked by A. Mixed, unproven
+    and proven-to-fail lessons are left out. z = the gate's (smoothed) z-scores."""
     pipeline = [
         {"$vectorSearch": {"index": INDEX, "path": "embedding", "queryVector": qvec, "exact": True,
                            "limit": 1000, "filter": _notebook_filter(before, agent_id)}},
@@ -202,12 +213,10 @@ def search(qvec: list[float], z: dict, before, almanac: bool, agent_id: str = "l
         {"$addFields": {"in_range": _in_range_count(z), "cls": _class_expr()}},
     ]
     if almanac:
-        pipeline += [{"$match": {"cls": {"$lt": 3}}},
-                     {"$addFields": {"_rank": {"$cond": [{"$lt": ["$cls", 2]}, "$A", "$score"]}}},
-                     {"$sort": {"cls": 1, "_rank": -1}}]
+        pipeline += [{"$match": {"cls": 0}}, {"$sort": {"A": -1, "score": -1}}]
     else:
         pipeline += [{"$sort": {"score": -1}}]
-    pipeline += [{"$limit": cap}, {"$project": {"embedding": 0, "evidence": 0, "_rank": 0}}]
+    pipeline += [{"$limit": cap}, {"$project": {"embedding": 0, "evidence": 0}}]
     return list(coll().aggregate(pipeline))
 
 

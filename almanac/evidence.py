@@ -1,60 +1,122 @@
 """Evidence logs for the conditional-track-record gate.
 
-backfill(): rebuild every lesson's evidence from the learning run, in ONE aggregation:
-  birth entry   {date: learned_date, z: fp, win: 1}
-  + one entry per resolved decision that cited the lesson ($lookup into outcomes)
-    {date: resolved_date, z: decision-day z, win: outcome == "win"}
-  -> $merge back into lessons. Idempotent.
+backfill(): rebuild every lesson's evidence and W/L from the learning run.
+  Each entry is {date, z, win}: decision-day z-scores, dated when the result was known, and win = whether
+  the lesson's OWN recommendation (REC: buy-won -> IN, buy-lost -> OUT, sell-won -> OUT, sell-lost -> IN)
+  was right over that 5-day stretch.
+    birth         the trade the lesson was written from (win 1 by construction)
+    rediscovery   every later trade that merged into it (recovered by replaying the learner's lesson
+                  writing from the disk cache and matching the text; never calls the model)
+    citation      every resolved decision that cited it ($lookup lessons -> outcomes)
+  wins/losses are recounted from the evidence (so the W/L line and A describe the same history), and the
+  retirement rule is re-run on the corrected counts. Idempotent.
 
-report(): per demo preset, how the A gate behaves.
+report(): per demo preset, how the gate behaves.
 
 Run:  python -m almanac.evidence backfill
       python -m almanac.evidence report
 """
+import json
 import sys
+from datetime import datetime
 
 import numpy as np
+from pymongo import UpdateOne
+from scipy.stats import beta
 
 from almanac import config, db
 from almanac.data import features_until
 from almanac.features import VARS
-from almanac.lessons import retrieve
+from almanac.lessons import REC, evidence_entry, rec_win, retrieve
 
 AGENT = config.LEARN_AGENT
 
 
-def _zarr(path: str) -> list:
-    return [f"{path}.{v}" for v in VARS]
+def _cached_lesson_text(o: dict) -> str | None:
+    """The lesson text the learner wrote for outcome `o`, read from the LLM disk cache (None if not cached)."""
+    from almanac.learn import LESSON_SCHEMA, LESSON_SYSTEM, lesson_prompt
+    from almanac.llm import _cache_path
+    payload = {"model": config.LLM_MODEL, "effort": config.LLM_EFFORT, "system": LESSON_SYSTEM,
+               "user": lesson_prompt(o), "schema": LESSON_SCHEMA}
+    p = _cache_path("llm", payload)
+    return json.loads(p.read_text())["lesson"].strip() if p.exists() else None
 
 
-def backfill(agent_id: str = AGENT) -> int:
-    pipeline = [
+def config_cutoff() -> datetime:
+    """Retirements from the recount are dated at the end of the learning period (evidence ends there)."""
+    return datetime.fromisoformat(config.NOTEBOOK_END)
+
+
+def _should_retire(w: int, l: int) -> tuple[bool, float]:
+    p = float(beta.cdf(0.5, 1 + w, 1 + l))
+    return (w + l >= config.RETIRE_MIN_N and p > config.RETIRE_PROB), p
+
+
+def backfill(agent_id: str = AGENT) -> dict:
+    L = db.db()["lessons"]
+    # citations via $lookup (one aggregation), plus the fields we need from each lesson
+    rows = list(L.aggregate([
         {"$match": {"agent_id": agent_id}},
-        {"$lookup": {
-            "from": "outcomes",
-            "let": {"lid": "$_id"},
-            "pipeline": [
-                {"$match": {"$expr": {"$and": [{"$in": ["$$lid", {"$ifNull": ["$cited", []]}]},
-                                               {"$eq": ["$status", "resolved"]}]}}},
-                {"$project": {"resolved_date": 1, "fp": 1, "outcome": 1}},
-            ],
-            "as": "uses"}},
-        {"$project": {"evidence": {"$concatArrays": [
-            [{"date": "$learned_date", "z": _zarr("$fp"), "win": 1}],
-            {"$map": {"input": {"$sortArray": {"input": "$uses", "sortBy": {"resolved_date": 1}}}, "as": "u",
-                      "in": {"date": "$$u.resolved_date", "z": _zarr("$$u.fp"),
-                             "win": {"$cond": [{"$eq": ["$$u.outcome", "win"]}, 1, 0]}}}},
-        ]}}},
-        {"$merge": {"into": "lessons", "on": "_id", "whenMatched": "merge", "whenNotMatched": "discard"}},
-    ]
-    db.db()["lessons"].aggregate(pipeline)
-    stats = next(db.db()["lessons"].aggregate([
-        {"$match": {"agent_id": agent_id}},
-        {"$project": {"n": {"$size": {"$ifNull": ["$evidence", []]}}}},
-        {"$group": {"_id": None, "lessons": {"$sum": 1}, "entries": {"$sum": "$n"}, "max": {"$max": "$n"}}}]))
-    print(f"backfilled {stats['lessons']} lessons, {stats['entries']} evidence entries "
-          f"(avg {stats['entries'] / stats['lessons']:.1f}, max {stats['max']})")
-    return stats["entries"]
+        {"$lookup": {"from": "outcomes", "let": {"lid": "$_id"}, "as": "uses", "pipeline": [
+            {"$match": {"$expr": {"$and": [{"$in": ["$$lid", {"$ifNull": ["$cited", []]}]},
+                                           {"$eq": ["$status", "resolved"]}]}}},
+            {"$project": {"resolved_date": 1, "fp": 1, "R": 1}}]}},
+        {"$project": {"text": 1, "action": 1, "outcome": 1, "fp": 1, "learned_date": 1, "status": 1,
+                      "wins": 1, "losses": 1, "history": 1, "uses": 1}},
+    ]))
+    by_text = {r["text"].strip(): r["_id"] for r in rows}
+    by_variant = {h["variant"].strip(): r["_id"] for r in rows for h in r.get("history", [])
+                  if h.get("event") == "widen" and h.get("variant")}
+
+    # rediscoveries: replay each resolved outcome's lesson text from cache and match it
+    merges, births, missing = {}, set(), 0
+    for o in db.db()["outcomes"].find({"agent_id": agent_id, "status": "resolved"}):
+        text = _cached_lesson_text(o)
+        if text is None:
+            missing += 1
+        elif text in by_variant:
+            merges.setdefault(by_variant[text], []).append(o)
+        elif text in by_text:
+            births.add(by_text[text])
+
+    ops, retired_now, before_after = [], [], []
+    now = datetime.utcnow()
+    for r in rows:
+        rec = REC[(r["action"], r["outcome"])]
+        ev = [evidence_entry(r["learned_date"], r["fp"], 1)]
+        ev += [evidence_entry(o["resolved_date"], o["fp"], rec_win(rec, o["R"])) for o in merges.get(r["_id"], [])]
+        ev += [evidence_entry(u["resolved_date"], u["fp"], rec_win(rec, u["R"])) for u in r["uses"]]
+        ev.sort(key=lambda e: e["date"])
+        w = sum(e["win"] for e in ev)
+        l = len(ev) - w
+        retire, p = _should_retire(w, l)
+        sets = {"evidence": ev, "wins": w, "losses": l, "rec": rec, "status": "retired" if retire else "active"}
+        upd = {"$set": sets}
+        if retire and r["status"] != "retired":
+            retired_now.append((r, w, l, p))
+            upd["$push"] = {"history": {"event": "retired", "date": now, "p_lose": p, "by": "evidence recount"}}
+        ops.append(UpdateOne({"_id": r["_id"]}, upd))
+        before_after.append((r["wins"], r["losses"], w, l))
+    L.bulk_write(ops)
+    if retired_now:
+        db.db()["memory_events"].insert_many([
+            {"type": "retire", "lesson_id": r["_id"], "date": config_cutoff(), "at": now, "wins": w, "losses": l, "p_lose": p, "text": r["text"], "by": "evidence recount"}
+            for r, w, l, p in retired_now])
+
+    n_ev = [1 + len(merges.get(r["_id"], [])) + len(r["uses"]) for r in rows]
+    stats = {"lessons": len(rows), "entries": sum(n_ev), "median": float(np.median(n_ev)), "max": max(n_ev),
+             "merges_matched": sum(len(v) for v in merges.values()), "births_matched": len(births),
+             "cache_misses": missing, "retired": len(retired_now),
+             "active": L.count_documents({"agent_id": agent_id, "status": "active"})}
+    print(f"backfilled {stats['lessons']} lessons: {stats['entries']} evidence entries "
+          f"(median {stats['median']:.0f}, max {stats['max']}); rediscoveries matched {stats['merges_matched']}, "
+          f"births matched {stats['births_matched']}, cache misses {missing}")
+    print(f"retired by the corrected records: {len(retired_now)}  (active now: {stats['active']})")
+    for r, w, l, p in retired_now[:5]:
+        print(f"  retired {w}W/{l}L (P(lose)={p:.2f}): {r['text'][:110]}")
+    big = sorted(before_after, key=lambda t: -(t[0] + t[1]))[:3]
+    print("  biggest lessons, W/L before -> after:", ", ".join(f"{a}W/{b}L -> {c}W/{d}L" for a, b, c, d in big))
+    return stats
 
 
 def report(agent_id: str = AGENT):
