@@ -65,6 +65,9 @@ IN_RANGE_MIN = 6    # (legacy box rule; boxes now only drive the "unfamiliar con
 KERNEL_H = 1.5      # similarity bandwidth in z-units
 A_MIN = 0.55        # show a lesson only if it worked at least this often in markets like today...
 NEFF_MIN = 1.0      # ...based on at least this much similar evidence (below = "unproven here")
+A_FAIL = 0.45       # hide only lessons proven to fail here: A < A_FAIL with n_eff >= NEFF_MIN
+GATE_SMOOTH_DAYS = 5   # the gate scores lessons against the 5-day average of the 8 z-scores
+CONFIRM_DAYS = 2       # simulator changes position only when the same target appears 2 days in a row
 DEMO_MAX_DAYS = 60            # sweep window length; /run itself has no cap
 DEMO_END = "2024-12-31"
 NOTEBOOK_CUTOFF = "2016-01-01"  # demo sees only lessons AND evidence dated before this

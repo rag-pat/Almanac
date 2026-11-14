@@ -30,19 +30,22 @@ def test_window_rules():
 
 
 @pytest.mark.skipif(not config.MONGODB_URI, reason="no Atlas URI")
-def test_simulator_charges_cost_only_when_target_changes(monkeypatch):
-    """Targets: IN, IN, OUT, OUT. Fill at next open; one buy (day 1 open) and one sell (day 3 open)."""
+def test_simulator_needs_same_target_two_days_in_a_row(monkeypatch):
+    """Targets IN, IN, OUT, OUT, OUT, IN, OUT: act on day 1 (IN confirmed) and day 3 (OUT confirmed);
+    the lone IN on day 5 is never confirmed. Fills at the next open."""
     import almanac.demo as demo
     from almanac.data import load_csv
-    days = list(load_csv("SPY").loc["2019-03-01":].index[:5])
-    targets = ["IN", "IN", "OUT", "OUT", "OUT"]
+    spy = load_csv("SPY")
+    days = list(spy.loc["2019-03-01":].index[:7])
+    targets = ["IN", "IN", "OUT", "OUT", "OUT", "IN", "OUT"]
     dec = {(a, d.to_pydatetime()): {"target": t, "reason": "", "cited": [], "n_lessons": 0}
            for d, t in zip(days, targets) for a in demo.AGENTS}
     monkeypatch.setattr(demo, "load", lambda s, e, seed=None: (days, {}, dec))
     sim = demo.simulate(days[0], days[-1])
-    spy = load_csv("SPY")
-    expected = (1 - config.COST) ** 2 * spy.loc[days[3], "open"] / spy.loc[days[1], "open"]
     rec = sim["days"]
-    assert [r["agents"]["almanac"]["action"] for r in rec] == ["buy", "stay_in", "sell", "stay_out", "stay_out"]
-    assert rec[-1]["agents"]["almanac"]["equity"] == pytest.approx(expected, abs=1e-5)  # streamed equity is rounded to 5 dp
-    assert sim["metrics"]["almanac"]["trades"] == 2
+    assert [r["agents"]["almanac"]["action"] for r in rec] == \
+        ["stay_out", "buy", "stay_in", "sell", "stay_out", "stay_out", "stay_out"]
+    expected = (1 - config.COST) ** 2 * spy.loc[days[4], "open"] / spy.loc[days[2], "open"]
+    assert rec[-1]["agents"]["almanac"]["equity"] == pytest.approx(expected, abs=1e-5)  # streamed equity is rounded
+    m = sim["metrics"]["almanac"]
+    assert m["trades"] == 2 and m["cost_drag"] > 0

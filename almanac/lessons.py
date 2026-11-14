@@ -178,44 +178,58 @@ def _notebook_filter(before, agent_id: str) -> dict:
     return {"status": "active", "learned_date": {"$lt": _to_date(before)}, "agent_id": agent_id}
 
 
+def _class_expr() -> dict:
+    """0 = proven here (A >= A_MIN), 1 = mixed here, 2 = unproven here (n_eff < NEFF_MIN), 3 = proven to fail here."""
+    proven_n = {"$gte": ["$n_eff", config.NEFF_MIN]}
+    return {"$switch": {"branches": [
+        {"case": {"$not": [proven_n]}, "then": 2},
+        {"case": {"$gte": ["$A", config.A_MIN]}, "then": 0},
+        {"case": {"$lt": ["$A", config.A_FAIL]}, "then": 3},
+    ], "default": 1}}
+
+
 def search(qvec: list[float], z: dict, before, almanac: bool, agent_id: str = "learner",
            cap: int = config.RETRIEVE_CAP) -> list[dict]:
-    """Relevant lessons for today. Plain: best similarity first. almanac=True keeps only lessons with a good
-    conditional record here (A >= A_MIN, n_eff >= NEFF_MIN), ranked by A — all in one pipeline."""
+    """Relevant lessons for today, in one pipeline. Plain: best similarity first.
+    almanac=True: hide only lessons proven to fail here (A < A_FAIL, n_eff >= NEFF_MIN); rank proven-here
+    first (by A), then mixed (by A), then unproven-here (by similarity). z = the gate's (smoothed) z-scores."""
     pipeline = [
         {"$vectorSearch": {"index": INDEX, "path": "embedding", "queryVector": qvec, "exact": True,
                            "limit": 1000, "filter": _notebook_filter(before, agent_id)}},
         {"$addFields": {"score": {"$meta": "vectorSearchScore"}}},
         {"$match": {"score": {"$gte": config.ATLAS_SCORE_MIN}}},
         *_applicability_stages(z, before),
-        {"$addFields": {"in_range": _in_range_count(z)}},
+        {"$addFields": {"in_range": _in_range_count(z), "cls": _class_expr()}},
     ]
     if almanac:
-        pipeline += [{"$match": _applies()}, {"$sort": {"A": -1, "score": -1}}]
+        pipeline += [{"$match": {"cls": {"$lt": 3}}},
+                     {"$addFields": {"_rank": {"$cond": [{"$lt": ["$cls", 2]}, "$A", "$score"]}}},
+                     {"$sort": {"cls": 1, "_rank": -1}}]
     else:
         pipeline += [{"$sort": {"score": -1}}]
-    pipeline += [{"$limit": cap}, {"$project": {"embedding": 0, "evidence": 0}}]
+    pipeline += [{"$limit": cap}, {"$project": {"embedding": 0, "evidence": 0, "_rank": 0}}]
     return list(coll().aggregate(pipeline))
 
 
 def notebook_coverage(z: dict, before, agent_id: str = "learner") -> dict:
-    """Over the WHOLE visible notebook: how many lessons apply here (A gate), how many are unproven here
-    (n_eff < NEFF_MIN), and which variables are outside every lesson's box ("unfamiliar conditions")."""
+    """Over the WHOLE visible notebook: lessons proven here, unproven here, proven to fail here, and which
+    variables are outside every lesson's box ("unfamiliar conditions"). z = the gate's z-scores."""
+    cls = _class_expr()
     group = {"_id": None, "total": {"$sum": 1},
-             "applies": {"$sum": {"$cond": [{"$and": [{"$gte": ["$A", config.A_MIN]},
-                                                       {"$gte": ["$n_eff", config.NEFF_MIN]}]}, 1, 0]}},
-             "unproven": {"$sum": {"$cond": [{"$lt": ["$n_eff", config.NEFF_MIN]}, 1, 0]}}}
+             "applies": {"$sum": {"$cond": [{"$eq": [cls, 0]}, 1, 0]}},
+             "unproven": {"$sum": {"$cond": [{"$eq": [cls, 2]}, 1, 0]}},
+             "failing": {"$sum": {"$cond": [{"$eq": [cls, 3]}, 1, 0]}}}
     group.update({f"cov_{v}": {"$sum": _inside(v, float(z[v]))} for v in VARS})
     res = next(coll().aggregate([{"$match": _notebook_filter(before, agent_id)},
                                  *_applicability_stages(z, before), {"$group": group}]), None)
     if not res:
-        return {"n_total": 0, "n_applies": 0, "n_unproven": 0, "unfamiliar": list(VARS)}
+        return {"n_total": 0, "n_applies": 0, "n_unproven": 0, "n_failing": 0, "unfamiliar": list(VARS)}
     return {"n_total": res["total"], "n_applies": res["applies"], "n_unproven": res["unproven"],
-            "unfamiliar": [v for v in VARS if res[f"cov_{v}"] == 0]}
+            "n_failing": res["failing"], "unfamiliar": [v for v in VARS if res[f"cov_{v}"] == 0]}
 
 
 def applicable_lessons(z: dict, before, agent_id: str = "learner") -> dict:
-    """{lesson_id: text} for every visible lesson that applies today (A gate; ignores text similarity)."""
+    """{lesson_id: text} for every visible lesson proven here (A gate; ignores text similarity)."""
     rows = coll().aggregate([
         {"$match": _notebook_filter(before, agent_id)},
         *_applicability_stages(z, before),
@@ -225,22 +239,26 @@ def applicable_lessons(z: dict, before, agent_id: str = "learner") -> dict:
     return {str(r["_id"]): r["text"] for r in rows}
 
 
-def retrieve(z: dict, before, agent_id: str = "learner", qvec: list[float] | None = None) -> dict:
+def retrieve(z: dict, before, agent_id: str = "learner", qvec: list[float] | None = None,
+             z_gate: dict | None = None) -> dict:
     """One call per day: embed today's description, return what each agent type sees + coverage for the UI.
-    z: today's z-scores keyed by variable name. before: window start (only lessons learned earlier are visible).
-    qvec: precomputed query embedding of describe(z) (batched precompute passes it in)."""
+    z: today's z-scores (describes the day / similarity). z_gate: z-scores the gate scores against (the demo
+    passes a 5-day average); defaults to z. before: only lessons learned / evidence dated earlier count.
+    qvec: precomputed query embedding of describe(z)."""
     from almanac.features import describe
     from almanac.llm import embed
 
     before = _to_date(before)
-    z = {v: float(z[f"z_{v}"] if f"z_{v}" in z else z[v]) for v in VARS}
+    norm = lambda d: {v: float(d[f"z_{v}"] if f"z_{v}" in d else d[v]) for v in VARS}
+    z = norm(z)
+    zg = norm(z_gate) if z_gate else z
     text = describe(z)
     qvec = qvec or embed(text, "query")
     return {
         "description": text,
-        "relevant": search(qvec, z, before, almanac=False, agent_id=agent_id),  # plain + plain_ctx
-        "almanac": search(qvec, z, before, almanac=True, agent_id=agent_id),    # almanac (conditional record)
-        **notebook_coverage(z, before, agent_id),
+        "relevant": search(qvec, zg, before, almanac=False, agent_id=agent_id),  # plain + plain_ctx
+        "almanac": search(qvec, zg, before, almanac=True, agent_id=agent_id),    # almanac (3-tier gate)
+        **notebook_coverage(zg, before, agent_id),
     }
 
 

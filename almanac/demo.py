@@ -46,30 +46,40 @@ def simulate(start, end, seed: int | None = None) -> dict:
     days, market, dec = load(start, end, seed)
     bars = bars_until(days[-1], since=days[0])
     brokers = {a: Broker() for a in AGENTS}
+    free = {a: Broker(cost=0.0) for a in AGENTS}  # zero-cost shadow brokers -> cost drag
     invested_days = {a: 0 for a in AGENTS}
+    last_target = {a: None for a in AGENTS}  # confirmation rule: act only on the same target CONFIRM_DAYS in a row
+    streak = {a: 0 for a in AGENTS}
     closes, records = [], []
     for d in days:
         key = d.to_pydatetime()
         b = bars.loc[d]
         for a, br in brokers.items():
-            br.on_open(d, float(b["open"]))
-            br.on_close(d, float(b["close"]))
+            for x in (br, free[a]):
+                x.on_open(d, float(b["open"]))
+                x.on_close(d, float(b["close"]))
             invested_days[a] += br.invested
         closes.append(float(b["close"]))
         agents = {}
         for a, br in brokers.items():
             x = dec.get((a, key), {})
             target, was_in = x.get("target"), br.invested
-            if target == "IN":
+            streak[a] = streak[a] + 1 if (target is not None and target == last_target[a]) else (1 if target else 0)
+            last_target[a] = target
+            confirmed = target if streak[a] >= config.CONFIRM_DAYS else None
+            if confirmed == "IN":
                 action = "stay_in" if was_in else "buy"
-            elif target == "OUT":
+            elif confirmed == "OUT":
                 action = "sell" if was_in else "stay_out"
-            else:  # no usable answer: keep the position
+            else:  # unconfirmed or no usable answer: keep the position
                 action = "stay_in" if was_in else "stay_out"
             br.order({"buy": "buy", "sell": "sell"}.get(action, "hold"))
-            agents[a] = {"action": action, "target": target, "reason": x.get("reason", ""),
+            free[a].order({"buy": "buy", "sell": "sell"}.get(action, "hold"))
+            agents[a] = {"action": action, "target": target, "confirmed": confirmed is not None,
+                         "reason": x.get("reason", ""),
                          "invested": was_in, "equity": round(br.equity[-1][1], 5),
-                         "n_lessons": x.get("n_lessons", 0), "cited": x.get("cited", [])}
+                         "n_lessons": x.get("n_lessons", 0), "cited": x.get("cited", []),
+                         "shown": x.get("shown", [])}
         m = market.get(key, {})
         records.append({"date": f"{d:%Y-%m-%d}",
                         "ohlc": {k: float(b[k]) for k in ("open", "high", "low", "close")},
@@ -77,9 +87,12 @@ def simulate(start, end, seed: int | None = None) -> dict:
                         "description": m.get("description", ""), "coverage": m.get("coverage", {}),
                         "applies": m.get("applies", []), "agents": agents})
     bench = [c / closes[0] for c in closes]
+    metrics = {}
+    for a, br in brokers.items():
+        metrics[a] = summarize([e for _, e in br.equity], br.trades, invested_days[a], closes)
+        metrics[a]["cost_drag"] = float(free[a].equity[-1][1] - br.equity[-1][1])  # return lost to costs
     return {"days": records,
-            "metrics": {a: summarize([e for _, e in br.equity], br.trades, invested_days[a], closes)
-                        for a, br in brokers.items()},
+            "metrics": metrics,
             "benchmark": summarize(bench, [{"action": "buy", "price": closes[0]}], len(days), closes)}
 
 
@@ -153,6 +166,8 @@ def stream_demo(start, end, seed: int | None = None):
             r["events"].append({"kind": "unfamiliar", "text": "unfamiliar conditions: " + ", ".join(unf)})
         prev_unf = unf
         r.pop("applies", None)
+        for ag in r["agents"].values():
+            ag.pop("shown", None)
 
     yield {"type": "start", "n_days": len(recs), "prep_seconds": round(time.time() - t0, 1),
            "from_stream": len(watcher.events)}

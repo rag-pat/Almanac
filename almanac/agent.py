@@ -90,7 +90,13 @@ def build_prompt(date, position: dict | None, lessons: list[dict], mode: str, fe
         sid = f"L{i}"
         id_map[sid] = str(les["_id"])
         if mode == "almanac" and "A" in les:  # conditional record: how it did in markets like today
-            line = f"[{sid}] worked {les['A']:.0%} in markets like today ({les['n_eff']:.1f} similar uses) {les['text']}"
+            cls = les.get("cls", 0)
+            if cls == 2:
+                line = f"[{sid}] unproven here, overall {les['wins']}W/{les['losses']}L: {les['text']}"
+            else:
+                tag = "proven here" if cls == 0 else "mixed here"
+                line = (f"[{sid}] {tag}: worked {les['A']:.0%} in markets like today "
+                        f"({les['n_eff']:.1f} similar uses): {les['text']}")
         else:
             line = f"[{sid}] ({les['wins']}W/{les['losses']}L) {les['text']}"
         if mode == "plain_ctx":

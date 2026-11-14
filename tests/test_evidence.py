@@ -70,8 +70,28 @@ def test_evidence_after_window_start_never_affects_A(today, seeded):
 def test_almanac_ranks_by_A_and_shows_record_in_prompt(today, seeded):
     from almanac.agent import build_prompt
     r = retrieve(today, WINDOW, agent_id=AGENT)
-    assert [x["A"] for x in r["almanac"]] == sorted([x["A"] for x in r["almanac"]], reverse=True)
+    cls = [x["cls"] for x in r["almanac"]]
+    assert cls == sorted(cls)                                     # proven, then mixed, then unproven
+    proven = [x["A"] for x in r["almanac"] if x["cls"] < 2]
+    assert proven == sorted(proven, reverse=True)
     user, _ = build_prompt("2020-03-16", {"in": False, "days": 0}, r["almanac"], "almanac")
     assert "in markets like today (" in user and "similar uses)" in user
     plain, _ = build_prompt("2020-03-16", {"in": False, "days": 0}, r["relevant"], "plain")
     assert "W/" in plain and "markets like today" not in plain
+
+
+def test_lessons_proven_to_fail_here_are_hidden(today, seeded):
+    from almanac.lessons import coll
+    d = dict(seeded["no future"])
+    d.pop("_id", None)
+    d["text"] = "fails here"
+    from almanac.lessons import evidence_entry
+    d["evidence"] = [evidence_entry(datetime(2011, 1, 3), today, 0) for _ in range(4)]   # A = 1/6, n_eff = 4
+    coll().insert_one(d)
+    t0 = time.time()
+    while time.time() - t0 < 30 and "fails here" not in [x["text"] for x in retrieve(today, WINDOW, agent_id=AGENT)["relevant"]]:
+        time.sleep(1)
+    r = retrieve(today, WINDOW, agent_id=AGENT)
+    assert "fails here" in [x["text"] for x in r["relevant"]]
+    assert "fails here" not in [x["text"] for x in r["almanac"]]
+    assert r["n_failing"] >= 1

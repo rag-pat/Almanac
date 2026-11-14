@@ -53,7 +53,8 @@ def trading_days(start, end) -> list:
 
 def _lesson_view(les: dict) -> dict:
     return {"id": str(les["_id"]), "text": les["text"], "wins": les["wins"], "losses": les["losses"],
-            "A": round(float(les.get("A", 0.5)), 3), "n_eff": round(float(les.get("n_eff", 0.0)), 2)}
+            "A": round(float(les.get("A", 0.5)), 3), "n_eff": round(float(les.get("n_eff", 0.0)), 2),
+            "cls": int(les.get("cls", 2))}
 
 
 def day_contexts(dates: list, workers: int = 16) -> dict:
@@ -67,16 +68,20 @@ def day_contexts(dates: list, workers: int = 16) -> dict:
     pos = {d: i for i, d in enumerate(all_bar_dates)}
 
     z_by = {d: {v: float(feats.loc[d, f"z_{v}"]) for v in VARS} for d in dates}
+    # the gate scores against the average of the last GATE_SMOOTH_DAYS days (past only, includes today)
+    zcols = [f"z_{v}" for v in VARS]
+    smooth = feats[zcols].rolling(config.GATE_SMOOTH_DAYS, min_periods=1).mean()
+    zg_by = {d: {v: float(smooth.loc[d, f"z_{v}"]) for v in VARS} for d in dates}
     texts = [describe(z_by[d]) for d in dates]
     qvecs = dict(zip(dates, embed_many(texts, "query")))
 
     def one(d):
-        z = z_by[d]
-        r = retrieve(z, CUTOFF, agent_id=NOTEBOOK, qvec=qvecs[d])
+        z, zg = z_by[d], zg_by[d]
+        r = retrieve(z, CUTOFF, agent_id=NOTEBOOK, qvec=qvecs[d], z_gate=zg)
         closes = list(bars.loc[:d]["close"].iloc[-20:])
         return d, {"feat": feats.loc[d].to_dict(), "z": z, "r": r, "closes": closes,
                    "day_number": DAY_OFFSET + pos[d.to_pydatetime()] + 1,
-                   "applies": list(applicable_lessons(z, CUTOFF, NOTEBOOK))}
+                   "z_gate": zg, "applies": list(applicable_lessons(zg, CUTOFF, NOTEBOOK))}
 
     with ThreadPoolExecutor(workers) as pool:
         return dict(pool.map(one, dates))
@@ -87,7 +92,8 @@ def _market_doc(d, c, seed) -> dict:
     return {"agent": "_market", "date": d.to_pydatetime(), "seed": seed, "description": r["description"],
             "variables": {v: round(c["z"][v], 3) for v in VARS},
             "signals": {"rsi2": round(float(feat["rsi2"]), 1), "above200": bool(feat["above200"])},
-            "coverage": {"applies": r["n_applies"], "unproven": r["n_unproven"], "total": r["n_total"],
+            "coverage": {"applies": r["n_applies"], "unproven": r["n_unproven"], "failing": r["n_failing"],
+                         "total": r["n_total"],
                          "relevant": len(r["relevant"]), "unfamiliar": r["unfamiliar"]},
             "applies": c["applies"], "at": datetime.utcnow()}
 
@@ -101,6 +107,7 @@ def _decide_with_retry(d, agent, c, seed, tries: int = 6) -> dict:
             by_id = {str(x["_id"]): x for x in seen[agent]}
             return {"agent": agent, "date": d.to_pydatetime(), "seed": seed, "target": out["target"],
                     "reason": out["reason"], "n_lessons": out["n_lessons"],
+                    "shown": [str(x["_id"]) for x in seen[agent]],
                     "cited": [_lesson_view(by_id[i]) for i in out["cited"] if i in by_id], "at": datetime.utcnow()}
         except Exception as e:  # rate limits / overload / network: back off and retry
             if attempt == tries - 1:

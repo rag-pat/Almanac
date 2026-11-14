@@ -58,28 +58,32 @@ def backfill(agent_id: str = AGENT) -> int:
 
 
 def report(agent_id: str = AGENT):
-    print(f"\n=== A gate per preset (h={config.KERNEL_H}, A>={config.A_MIN}, n_eff>={config.NEFF_MIN}) ===")
+    print(f"\n=== gate per preset (h={config.KERNEL_H}, proven A>={config.A_MIN}, hide A<{config.A_FAIL}, "
+          f"n_eff>={config.NEFF_MIN}, {config.GATE_SMOOTH_DAYS}-day smoothed z) ===")
     for name, (s, e) in config.PRESETS.items():
-        f = features_until(e).loc[s:e]
+        allf = features_until(e)
+        smooth = allf[[f"z_{v}" for v in VARS]].rolling(config.GATE_SMOOTH_DAYS, min_periods=1).mean()
+        f = allf.loc[s:e]
         shown, a_shown, hidden_low_a, unproven, best_example = [], [], [], [], None
         for _, row in f.iterrows():
             z = {v: float(row[f"z_{v}"]) for v in VARS}
-            r = retrieve(z, s, agent_id=agent_id)
+            zg = {v: float(smooth.loc[row.name, f"z_{v}"]) for v in VARS}
+            r = retrieve(z, config.NOTEBOOK_CUTOFF, agent_id=agent_id, z_gate=zg)
             shown.append(len(r["almanac"]))
             a_shown += [x["A"] for x in r["almanac"]]
-            hidden_low_a.append(sum(1 for x in r["relevant"] if x["n_eff"] >= config.NEFF_MIN and x["A"] < config.A_MIN))
-            unproven.append(sum(1 for x in r["relevant"] if x["n_eff"] < config.NEFF_MIN))
+            hidden_low_a.append(sum(1 for x in r["relevant"] if x["cls"] == 3))
+            unproven.append(sum(1 for x in r["relevant"] if x["cls"] == 2))
             for x in r["relevant"]:  # good overall record, poor record in markets like today
                 n = x["wins"] + x["losses"]
                 overall = x["wins"] / n if n else 0
-                if n >= 5 and overall >= 0.6 and x["n_eff"] >= config.NEFF_MIN and x["A"] < config.A_MIN:
+                if n >= 5 and overall >= 0.6 and x["cls"] == 3:
                     gap = overall - x["A"]
                     if best_example is None or gap > best_example[0]:
                         best_example = (gap, row.name, x, overall)
         print(f"\n  {name} ({len(f)} days, window starts {s})")
         print(f"    avg lessons shown to almanac: {np.mean(shown):.1f}   (plain sees up to {config.RETRIEVE_CAP})")
         print(f"    avg A of shown lessons: {np.mean(a_shown):.2f}" if a_shown else "    avg A of shown lessons: n/a (none shown)")
-        print(f"    avg relevant lessons hidden for low A: {np.mean(hidden_low_a):.1f}   "
+        print(f"    avg relevant lessons hidden (proven to fail here, A<{config.A_FAIL}): {np.mean(hidden_low_a):.1f}   "
               f"avg unproven here (n_eff<{config.NEFF_MIN:g}): {np.mean(unproven):.1f}")
         if best_example:
             _, day, x, overall = best_example

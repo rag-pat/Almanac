@@ -139,7 +139,7 @@ td.best { color: var(--alm); font-weight: 600; }
     <article class="agent" data-a="plain_ctx"><h2><span class="dot"></span>Plain memory + context</h2>
       <p class="what">Same lessons, plus where each was learned. Judges relevance itself.</p><div class="body"></div></article>
     <article class="agent" data-a="almanac"><h2><span class="dot"></span>Almanac</h2>
-      <p class="what">Only lessons with a good track record in markets like today.</p><div class="body"></div></article>
+      <p class="what">Lessons ranked by how they did in markets like today. Hides lessons proven to fail here.</p><div class="body"></div></article>
   </section>
 
   <section class="row">
@@ -189,7 +189,7 @@ function renderStrip(vars = {}, cov = null) {
       <div class="bar"><i style="left:${left}%;width:${w}%"></i></div><div class="flag">No lesson has seen this</div></div>`;
   }).join("") + `<div class="coverage">
       <div class="big">${cov?.total != null ? `${cov.applies} of ${cov.total}` : "–"}</div>
-      <div class="small">lessons proven in markets like today${cov?.total != null ? `. ${cov.unproven} unproven here.` : ""}</div></div>`;
+      <div class="small">lessons proven in markets like today${cov?.total != null ? `. ${cov.unproven} unproven, ${cov.failing ?? 0} proven to fail here.` : ""}</div></div>`;
 }
 
 function renderAgent(a, s) {
@@ -197,7 +197,9 @@ function renderAgent(a, s) {
   if (!s) { el.innerHTML = `<div class="verdict"><span class="act">–</span></div><p class="reason"></p>`; return; }
   const test = l => a === "almanac" && s.day
     ? `<br><button class="cf" data-id="${l.id}" data-date="${s.day}">Test: decide again without this lesson</button><div class="cf-out"></div>` : "";
-  const rec = l => a === "almanac" ? `${Math.round(l.A * 100)}% here, ${l.n_eff.toFixed(1)} similar uses` : `${l.wins}W/${l.losses}L`;
+  const rec = l => a !== "almanac" ? `${l.wins}W/${l.losses}L`
+    : l.cls === 2 ? `unproven here, ${l.wins}W/${l.losses}L overall`
+    : `${l.cls === 0 ? "proven" : "mixed"} here: ${Math.round(l.A * 100)}%, ${l.n_eff.toFixed(1)} similar uses`;
   const cited = s.cited.length ? s.cited.map(l => `<li><span class="rec">${rec(l)}</span> ${esc(l.text)}${test(l)}</li>`).join("")
     : `<li class="empty">${a === "none" ? "Has no memory. Decides from the chart and signals." : s.n_lessons ? "Cited no lessons today." : "No lessons to read today. Deciding from signals."}</li>`;
   const prev = el.dataset.act;
@@ -223,9 +225,11 @@ function addEvents(date, evs) {
 function pct(x) { return x == null ? "–" : (x * 100).toFixed(1) + "%"; }
 function num(x) { return x == null ? "–" : x.toFixed(2); }
 function renderEnd(msg) {
+  // rank: 1 = higher is better, -1 = lower is better, 0 = not ranked
   const rows = [["Total return", "total_return", pct, 1], ["Sharpe", "sharpe", num, 1], ["Sortino", "sortino", num, 1],
     ["Max drawdown", "max_drawdown", pct, 1], ["Calmar", "calmar", num, 1], ["Hit rate", "hit_rate", pct, 1],
-    ["Time invested", "time_invested", pct, 0], ["Trades", "trades", x => x ?? "–", 0]];
+    ["Trades", "trades", x => x ?? "–", 0], ["Time invested", "time_invested", pct, 0],
+    ["Cost drag", "cost_drag", pct, -1]];
   const cols = [...AGENTS, "benchmark"];
   const m = { ...msg.metrics, benchmark: msg.benchmark };
   const winner = AGENTS.reduce((b, a) => (m[a].total_return > m[b].total_return ? a : b));
@@ -233,8 +237,8 @@ function renderEnd(msg) {
     <p>Same model, prompt, signals and costs. Only the memory differs: none, plain, plain with context, or Almanac.</p>
     <table><thead><tr><th></th>${cols.map(c => `<th>${NAMES[c]}</th>`).join("")}</tr></thead><tbody>${
       rows.map(([label, k, fmt, rank]) => {
-        const vals = AGENTS.map(a => m[a][k]);
-        const best = rank && vals.some(v => v != null) ? Math.max(...vals.filter(v => v != null)) : null;
+        const vals = AGENTS.map(a => m[a][k]).filter(v => v != null);
+        const best = rank && vals.length ? (rank > 0 ? Math.max(...vals) : Math.min(...vals)) : null;
         return `<tr><td>${label}</td>${cols.map(c => `<td class="${rank && c !== "benchmark" && m[c][k] === best ? "best" : ""}">${fmt(m[c][k])}</td>`).join("")}</tr>`;
       }).join("")}</tbody></table>`;
   $("#endcard").classList.add("show");

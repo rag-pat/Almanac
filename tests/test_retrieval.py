@@ -66,15 +66,17 @@ def test_plain_gets_everything_that_sounds_like_today(today, seeded):
     assert scores == sorted(scores, reverse=True) and min(scores) >= config.ATLAS_SCORE_MIN
 
 
-def test_almanac_needs_a_proven_record_in_markets_like_today(today, seeded):
-    """Only the birth trade counts as evidence here: a lesson born exactly at today's conditions has
-    n_eff = 1, A = 2/3 (shown); lessons born 2+ z-units away have n_eff < 1 (unproven here, hidden)."""
+def test_almanac_three_tier_gate(today, seeded):
+    """Only birth trades are evidence here. The lesson born at today's conditions is 'proven here'
+    (n_eff = 1, A = 2/3) and ranks first; lessons born 2+ z-units away are 'unproven here' (n_eff < 1),
+    still shown, ranked by similarity. Nothing is proven to fail, so nothing relevant is hidden."""
     r = retrieve(today, BEFORE, agent_id=AGENT)
-    assert names(r["almanac"]) == ["crash 8of8"]
-    x = r["almanac"][0]
-    assert x["A"] == pytest.approx(2 / 3) and x["n_eff"] == pytest.approx(1.0)
-    hidden = {y["text"]: y["n_eff"] for y in r["relevant"] if y["text"] != "crash 8of8"}
-    assert all(n < config.NEFF_MIN for n in hidden.values())
+    assert r["almanac"][0]["text"] == "crash 8of8" and r["almanac"][0]["cls"] == 0
+    assert r["almanac"][0]["A"] == pytest.approx(2 / 3) and r["almanac"][0]["n_eff"] == pytest.approx(1.0)
+    assert set(names(r["almanac"])) == set(names(r["relevant"]))
+    rest = r["almanac"][1:]
+    assert all(x["cls"] == 2 for x in rest)
+    assert [x["score"] for x in rest] == sorted([x["score"] for x in rest], reverse=True)
 
 
 def test_retired_future_and_dissimilar_never_returned(today, seeded):
@@ -88,6 +90,7 @@ def test_coverage_counts_whole_visible_notebook(today, seeded):
     assert r["n_total"] == 5                  # retired + future excluded
     assert r["n_applies"] == 2                # crash 8of8 + calm 8of8 (coverage ignores text similarity)
     assert r["n_unproven"] == 3               # 6of8, 5of8, 0of8: born too far from today
+    assert r["n_failing"] == 0
     assert r["unfamiliar"] == []
 
 
