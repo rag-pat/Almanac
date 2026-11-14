@@ -24,6 +24,8 @@ EMBED_DIM = 1024
 SIM_RETRIEVE = 0.50   # lesson counts as "relevant" to today
 SIM_MERGE = 0.85      # rediscovery: also requires same action AND same outcome
 RETRIEVE_CAP = 30     # max lessons per prompt, highest score first
+# Atlas reports cosine vectorSearchScore as (1 + cos) / 2, so cos >= 0.50 <=> score >= 0.75.
+ATLAS_SCORE_MIN = (1 + SIM_RETRIEVE) / 2
 
 # Data
 SYMBOLS = ["SPY", "^VIX", "^TNX", "^IRX", "LQD", "IEF"]

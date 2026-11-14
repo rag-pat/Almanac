@@ -58,6 +58,35 @@ def ensure_collection():
         print(f"updated validator on {COLL}")
 
 
+FILTER_FIELDS = ["status", "learned_date", "agent_id"] + [f"lo_{v}" for v in VARS] + [f"hi_{v}" for v in VARS]
+
+INDEX_DEF = {
+    "fields": [{"type": "vector", "path": "embedding", "numDimensions": config.EMBED_DIM, "similarity": "cosine"}]
+              + [{"type": "filter", "path": f} for f in FILTER_FIELDS]
+}
+
+
+def ensure_index(wait: bool = True, timeout: int = 300):
+    c = coll()
+    existing = {i["name"]: i for i in c.list_search_indexes()}
+    if INDEX not in existing:
+        c.create_search_index(SearchIndexModel(definition=INDEX_DEF, name=INDEX, type="vectorSearch"))
+        print(f"creating vector index {INDEX}…")
+    elif existing[INDEX].get("latestDefinition") != INDEX_DEF:
+        c.update_search_index(INDEX, INDEX_DEF)
+        print(f"updating vector index {INDEX}…")
+    if not wait:
+        return
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        idx = next((i for i in c.list_search_indexes() if i["name"] == INDEX), None)
+        if idx and idx.get("queryable") and idx.get("status") == "READY":
+            print(f"vector index {INDEX} READY ({time.time() - t0:.0f}s)")
+            return
+        time.sleep(5)
+    raise TimeoutError(f"vector index {INDEX} not ready after {timeout}s")
+
+
 def make_lesson(text: str, embedding: list[float], fp: dict, action: str, outcome: str,
                 learned_date, agent_id: str = "learner") -> dict:
     """Build a new lesson document with a starting box of fp ± BOX on every variable."""
@@ -86,6 +115,7 @@ def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else "setup"
     if cmd == "setup":
         ensure_collection()
+        ensure_index()
     else:
         sys.exit(f"unknown command: {cmd}")
 
