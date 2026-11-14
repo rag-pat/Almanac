@@ -116,4 +116,4 @@ Everything in this repo was built during the hackathon on 2026-11-14:
 - A Claude trading agent with a disguised prompt, three memory modes and safety checks (made-up lesson IDs dropped, bad output becomes hold).
 - Broker and outcome scoring. The learning run writes, merges, widens and retires lessons in transactions with a full event log.
 - The 3-agent demo engine with a change stream on `market_state`, SSE streaming, the front end, metrics and the counterfactual flip-rate test.
-- 90+ tests.
+- 86 tests.
