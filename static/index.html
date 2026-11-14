@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Almanac</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+:root {
+  --bg: #141c2e; --panel: #1c2740; --panel-2: #222f4c; --line: #2d3b5c;
+  --text: #ece6d6; --muted: #8d97ab;
+  --plain: #94a0b8; --ctx: #b897c9; --alm: #e9b44c;
+  --up: #5fae8c; --down: #cf6a5f;
+  --serif: "Fraunces", Georgia, serif; --sans: "Instrument Sans", system-ui, sans-serif;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 var(--sans); font-variant-numeric: tabular-nums; }
+main { max-width: 1400px; margin: 0 auto; padding: 20px 16px 48px; }
+button, input { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--alm); outline-offset: 2px; }
+
+/* header + controls */
+header { display: flex; flex-wrap: wrap; gap: 16px 32px; align-items: end; justify-content: space-between; margin-bottom: 18px; }
+h1 { font: 700 40px/1 var(--serif); margin: 0; letter-spacing: -0.01em; }
+.tagline { color: var(--muted); margin: 6px 0 0; max-width: 62ch; }
+.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.controls label { color: var(--muted); font-size: 13px; display: flex; gap: 6px; align-items: center; }
+input[type=date] { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; color-scheme: dark; }
+.preset { background: transparent; border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px; cursor: pointer; }
+.preset:hover { border-color: var(--muted); }
+#run { background: var(--alm); color: #1d1606; border: 0; border-radius: 6px; padding: 7px 18px; font-weight: 600; cursor: pointer; }
+#run:disabled { opacity: .5; cursor: progress; }
+#status { color: var(--muted); font-size: 13px; min-height: 20px; margin: 0 0 12px; }
+
+/* conditions strip */
+.strip { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)) minmax(180px, 1.4fr); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; margin-bottom: 16px; }
+.var, .coverage { background: var(--panel); padding: 10px 12px; }
+.var .name { font-size: 12px; color: var(--muted); }
+.var .z { font-size: 18px; font-weight: 600; }
+.bar { position: relative; height: 4px; background: var(--line); border-radius: 2px; margin-top: 6px; }
+.bar::after { content: ""; position: absolute; left: 50%; top: -3px; width: 1px; height: 10px; background: var(--muted); }
+.bar i { position: absolute; top: 0; height: 4px; border-radius: 2px; background: var(--muted); }
+.var.hot .z { color: var(--down); } .var.hot .bar i { background: var(--down); }
+.var.unfamiliar { box-shadow: inset 0 -2px 0 var(--alm); }
+.var .flag { font-size: 11px; color: var(--alm); visibility: hidden; }
+.var.unfamiliar .flag { visibility: visible; }
+.coverage .big { font: 600 22px/1.1 var(--serif); }
+.coverage .small { font-size: 12px; color: var(--muted); }
+
+/* agents: the star */
+.agents { display: grid; grid-template-columns: 1fr 1fr 1.25fr; gap: 12px; margin-bottom: 16px; }
+.agent { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; display: flex; flex-direction: column; min-height: 300px; }
+.agent[data-a=almanac] { border-color: var(--alm); background: linear-gradient(var(--panel-2), var(--panel)); }
+.agent h2 { font: 600 16px/1.2 var(--sans); margin: 0; display: flex; align-items: center; gap: 8px; }
+.agent h2 .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--c); }
+.agent .what { color: var(--muted); font-size: 13px; margin: 2px 0 12px; }
+.verdict { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+.verdict .act { font: 700 38px/1 var(--serif); color: var(--c); min-width: 3.2em; }
+.verdict .act.flash { animation: flash .6s ease-out; }
+@keyframes flash { from { opacity: .2; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.verdict .eq { font-size: 20px; font-weight: 600; }
+.verdict .pos { font-size: 13px; color: var(--muted); }
+.reason { margin: 10px 0; color: var(--text); font-size: 14px; min-height: 2.9em; }
+.saw { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.cited { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; overflow-y: auto; max-height: 150px; }
+.cited li { font-size: 13px; padding: 6px 8px; border-left: 2px solid var(--c); background: rgba(255,255,255,.03); border-radius: 0 4px 4px 0; }
+.cited .rec { color: var(--muted); font-size: 12px; margin-right: 4px; }
+.cited .empty { color: var(--muted); border-left-color: var(--line); background: none; }
+.agent[data-a=plain] { --c: var(--plain); } .agent[data-a=plain_ctx] { --c: var(--ctx); } .agent[data-a=almanac] { --c: var(--alm); }
+
+/* charts + events */
+.row { display: grid; grid-template-columns: minmax(0, 2.2fr) minmax(260px, 1fr); gap: 12px; margin-bottom: 12px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+.card h3 { font: 600 14px/1.2 var(--sans); margin: 0 0 8px; color: var(--muted); }
+#candles { height: 340px; } #equity { height: 220px; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.legend span::before { content: ""; display: inline-block; width: 12px; height: 3px; margin-right: 6px; vertical-align: middle; background: var(--c); }
+#events { list-style: none; margin: 0; padding: 0; height: 340px; overflow-y: auto; display: grid; align-content: start; gap: 8px; }
+#events li { font-size: 13px; border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+#events .d { color: var(--muted); font-size: 12px; }
+#events .k-entered .t { color: var(--up); } #events .k-left .t { color: var(--down); } #events .k-unfamiliar .t { color: var(--alm); }
+#events .les { color: var(--muted); font-size: 12px; margin-top: 3px; }
+
+/* end card */
+#endcard { display: none; margin-top: 16px; }
+#endcard.show { display: block; }
+#endcard h2 { font: 700 26px/1.1 var(--serif); margin: 0 0 4px; }
+#endcard p { color: var(--muted); margin: 0 0 12px; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { text-align: right; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+th:first-child, td:first-child { text-align: left; }
+th { color: var(--muted); font-weight: 500; }
+td.best { color: var(--alm); font-weight: 600; }
+
+.empty-state { color: var(--muted); padding: 40px 0; text-align: center; }
+
+@media (max-width: 1000px) {
+  .strip { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .coverage { grid-column: 1 / -1; }
+  .agents, .row { grid-template-columns: 1fr; }
+  .agent { min-height: 0; }
+}
+@media (prefers-reduced-motion: reduce) { .verdict .act.flash { animation: none; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>Almanac</h1>
+      <p class="tagline">Three AI traders share one notebook of lessons they wrote from their own past trades. Almanac only reads lessons learned in market conditions like today's.</p>
+    </div>
+    <div class="controls">
+      <label>From <input type="date" id="start" min="2016-01-01" max="2024-12-31" value="2020-02-10"></label>
+      <label>To <input type="date" id="end" min="2016-01-01" max="2024-12-31" value="2020-05-01"></label>
+      <span id="presets"></span>
+      <button id="run">Run</button>
+    </div>
+  </header>
+  <p id="status" role="status">Pick a window from 2016 onward (up to 60 trading days), then press Run.</p>
+
+  <section class="strip" id="strip" aria-label="Today's market conditions"></section>
+
+  <section class="agents" aria-label="Agents">
+    <article class="agent" data-a="plain"><h2><span class="dot"></span>Plain memory</h2>
+      <p class="what">Reads every lesson that sounds relevant.</p><div class="body"></div></article>
+    <article class="agent" data-a="plain_ctx"><h2><span class="dot"></span>Plain memory + context</h2>
+      <p class="what">Same lessons, plus where each was learned. Judges relevance itself.</p><div class="body"></div></article>
+    <article class="agent" data-a="almanac"><h2><span class="dot"></span>Almanac</h2>
+      <p class="what">Only lessons whose learned conditions contain today's (6 of 8 in range).</p><div class="body"></div></article>
+  </section>
+
+  <section class="row">
+    <div class="card"><h3>Price, with each agent's trades</h3>
+      <div class="legend"><span style="--c:var(--plain)">Plain</span><span style="--c:var(--ctx)">Plain + context</span><span style="--c:var(--alm)">Almanac</span></div>
+      <div id="candles"></div></div>
+    <div class="card"><h3>Memory events</h3><ul id="events"></ul></div>
+  </section>
+  <section class="card"><h3>Equity (starts at 1.00)</h3>
+    <div class="legend"><span style="--c:var(--plain)">Plain</span><span style="--c:var(--ctx)">Plain + context</span><span style="--c:var(--alm)">Almanac</span><span style="--c:#55617a">Buy and hold</span></div>
+    <div id="equity"></div></section>
+
+  <section class="card" id="endcard" aria-live="polite"></section>
+</main>
+
+<script>
+const AGENTS = ["plain", "plain_ctx", "almanac"];
+const NAMES = { plain: "Plain memory", plain_ctx: "Plain + context", almanac: "Almanac", benchmark: "Buy and hold" };
+const COLORS = { plain: "#94a0b8", plain_ctx: "#b897c9", almanac: "#e9b44c" };
+const VARS = [["vol","Volatility"],["trend","Trend"],["drawdown","Drawdown"],["volume","Volume"],
+              ["vix","Fear (VIX)"],["rates","Yield change"],["curve","Yield curve"],["credit","Credit"]];
+const $ = (s, el = document) => el.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+// ---------- charts ----------
+const base = { layout: { background: { color: "transparent" }, textColor: "#8d97ab", fontFamily: "Instrument Sans" },
+  grid: { vertLines: { color: "#232f4a" }, horzLines: { color: "#232f4a" } },
+  rightPriceScale: { borderColor: "#2d3b5c" }, timeScale: { borderColor: "#2d3b5c" }, crosshair: { mode: 0 } };
+const candleChart = LightweightCharts.createChart($("#candles"), base);
+const candles = candleChart.addCandlestickSeries({ upColor: "#5fae8c", downColor: "#cf6a5f", borderVisible: false,
+  wickUpColor: "#5fae8c", wickDownColor: "#cf6a5f" });
+const eqChart = LightweightCharts.createChart($("#equity"), base);
+const eqLines = Object.fromEntries(AGENTS.map(a => [a, eqChart.addLineSeries({ color: COLORS[a], lineWidth: a === "almanac" ? 3 : 2, priceLineVisible: false })]));
+const bench = eqChart.addLineSeries({ color: "#55617a", lineWidth: 1, lineStyle: 2, priceLineVisible: false });
+new ResizeObserver(() => { candleChart.applyOptions({ width: $("#candles").clientWidth });
+  eqChart.applyOptions({ width: $("#equity").clientWidth }); }).observe(document.body);
+
+// ---------- static pieces ----------
+function renderStrip(vars = {}, cov = null) {
+  const unf = new Set(cov?.unfamiliar || []);
+  $("#strip").innerHTML = VARS.map(([k, label]) => {
+    const z = vars[k];
+    const w = z == null ? 0 : Math.min(Math.abs(z), 4) / 4 * 50;
+    const left = z == null ? 50 : (z >= 0 ? 50 : 50 - w);
+    return `<div class="var ${Math.abs(z) > 2 ? "hot" : ""} ${unf.has(k) ? "unfamiliar" : ""}">
+      <div class="name">${label}</div><div class="z">${z == null ? "–" : (z > 0 ? "+" : "") + z.toFixed(1)}</div>
+      <div class="bar"><i style="left:${left}%;width:${w}%"></i></div><div class="flag">No lesson has seen this</div></div>`;
+  }).join("") + `<div class="coverage">
+      <div class="big">${cov ? `${cov.in_range} of ${cov.total}` : "–"}</div>
+      <div class="small">lessons in range today${cov ? `, ${cov.relevant} sound relevant` : ""}</div></div>`;
+}
+
+function renderAgent(a, s) {
+  const el = $(`.agent[data-a=${a}] .body`);
+  if (!s) { el.innerHTML = `<div class="verdict"><span class="act">–</span></div><p class="reason"></p>`; return; }
+  const cited = s.cited.length ? s.cited.map(l => `<li><span class="rec">${l.wins}W/${l.losses}L</span>${esc(l.text)}</li>`).join("")
+    : `<li class="empty">${s.n_lessons ? "Cited no lessons today." : "No lessons to read today. Deciding from signals."}</li>`;
+  const prev = el.dataset.act;
+  el.innerHTML = `<div class="verdict"><span class="act ${prev && prev !== s.action ? "flash" : ""}">${s.action.toUpperCase()}</span>
+      <span class="eq">${s.equity.toFixed(3)}</span><span class="pos">${s.invested ? "Invested" : "In cash"}</span></div>
+    <p class="reason">${esc(s.reason)}</p>
+    <div class="saw">Saw ${s.n_lessons} lesson${s.n_lessons === 1 ? "" : "s"}, cited ${s.cited.length}</div>
+    <ul class="cited">${cited}</ul>`;
+  el.dataset.act = s.action;
+}
+
+function addEvents(date, evs) {
+  for (const e of evs) {
+    const li = document.createElement("li");
+    li.className = `k-${e.kind}`;
+    li.innerHTML = `<div class="d">${date}</div><div class="t">${esc(e.text)}</div>` +
+      (e.lessons || []).map(t => `<div class="les">${esc(t)}</div>`).join("");
+    $("#events").prepend(li);
+  }
+}
+
+function pct(x) { return x == null ? "–" : (x * 100).toFixed(1) + "%"; }
+function num(x) { return x == null ? "–" : x.toFixed(2); }
+function renderEnd(msg) {
+  const rows = [["Total return", "total_return", pct, 1], ["Sharpe", "sharpe", num, 1], ["Sortino", "sortino", num, 1],
+    ["Max drawdown", "max_drawdown", pct, 1], ["Calmar", "calmar", num, 1], ["Hit rate", "hit_rate", pct, 1],
+    ["Time invested", "time_invested", pct, 0], ["Trades", "trades", x => x ?? "–", 0]];
+  const cols = [...AGENTS, "benchmark"];
+  const m = { ...msg.metrics, benchmark: msg.benchmark };
+  const winner = AGENTS.reduce((b, a) => (m[a].total_return > m[b].total_return ? a : b));
+  $("#endcard").innerHTML = `<h2>${NAMES[winner]} finished ahead over ${msg.days} trading days</h2>
+    <p>Same notebook, same model, same prompt and same costs. Only the memory rule differs.</p>
+    <table><thead><tr><th></th>${cols.map(c => `<th>${NAMES[c]}</th>`).join("")}</tr></thead><tbody>${
+      rows.map(([label, k, fmt, rank]) => {
+        const vals = AGENTS.map(a => m[a][k]);
+        const best = rank && vals.some(v => v != null) ? Math.max(...vals.filter(v => v != null)) : null;
+        return `<tr><td>${label}</td>${cols.map(c => `<td class="${rank && c !== "benchmark" && m[c][k] === best ? "best" : ""}">${fmt(m[c][k])}</td>`).join("")}</tr>`;
+      }).join("")}</tbody></table>`;
+  $("#endcard").classList.add("show");
+}
+
+// ---------- run ----------
+let source = null;
+function reset() {
+  candles.setData([]); bench.setData([]); AGENTS.forEach(a => eqLines[a].setData([]));
+  $("#events").innerHTML = ""; $("#endcard").classList.remove("show");
+  AGENTS.forEach(a => { delete $(`.agent[data-a=${a}] .body`).dataset.act; renderAgent(a, null); });
+  renderStrip();
+}
+
+function run() {
+  const start = $("#start").value, end = $("#end").value;
+  if (!start || !end || start > end) { $("#status").textContent = "Pick a start date before the end date."; return; }
+  if (source) source.close();
+  reset();
+  $("#run").disabled = true;
+  $("#status").textContent = "Starting. The first day takes up to 30 seconds while the agents warm up.";
+  const markers = [], prevInv = { plain: false, plain_ctx: false, almanac: false };
+  let n = 0, firstClose = null;
+  source = new EventSource(`/run?start=${start}&end=${end}`);
+  source.addEventListener("day", ev => {
+    const d = JSON.parse(ev.data); n++;
+    firstClose ??= d.ohlc.close;
+    candles.update({ time: d.date, ...d.ohlc });
+    bench.update({ time: d.date, value: d.ohlc.close / firstClose });
+    AGENTS.forEach((a, i) => {
+      const s = d.agents[a];
+      eqLines[a].update({ time: d.date, value: s.equity });
+      // orders are placed at today's close; mark the decision day
+      if (s.action === "buy") markers.push({ time: d.date, position: "belowBar", color: COLORS[a], shape: "arrowUp", text: "" });
+      if (s.action === "sell") markers.push({ time: d.date, position: "aboveBar", color: COLORS[a], shape: "arrowDown", text: "" });
+      renderAgent(a, s);
+    });
+    candles.setMarkers(markers);
+    candleChart.timeScale().fitContent(); eqChart.timeScale().fitContent();
+    renderStrip(d.variables, d.coverage);
+    addEvents(d.date, d.events);
+    $("#status").textContent = `Day ${n}: ${d.date}. ${d.description}`;
+  });
+  source.addEventListener("end", ev => {
+    const msg = JSON.parse(ev.data);
+    renderEnd(msg); source.close(); $("#run").disabled = false;
+    $("#status").textContent = `Done. ${msg.days} trading days.`;
+  });
+  source.addEventListener("error", ev => {
+    let text = "The stream stopped. Check that the server is running, then press Run again.";
+    try { text = "Run failed: " + JSON.parse(ev.data).error; } catch (_) {}
+    source.close(); $("#run").disabled = false; $("#status").textContent = text;
+  });
+}
+$("#run").addEventListener("click", run);
+
+fetch("/presets").then(r => r.json()).then(p => {
+  $("#presets").innerHTML = Object.entries(p).map(([name, [s, e]]) =>
+    `<button class="preset" data-s="${s}" data-e="${e}">${esc(name.charAt(0).toUpperCase() + name.slice(1))}</button>`).join(" ");
+  $("#presets").addEventListener("click", ev => {
+    const b = ev.target.closest(".preset"); if (!b) return;
+    $("#start").value = b.dataset.s; $("#end").value = b.dataset.e; run();
+  });
+});
+reset();
+</script>
+</body>
+</html>
