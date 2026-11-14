@@ -188,8 +188,8 @@ function renderStrip(vars = {}, cov = null) {
       <div class="name">${label}</div><div class="z">${z == null ? "–" : (z > 0 ? "+" : "") + z.toFixed(1)}</div>
       <div class="bar"><i style="left:${left}%;width:${w}%"></i></div><div class="flag">No lesson has seen this</div></div>`;
   }).join("") + `<div class="coverage">
-      <div class="big">${cov ? `${cov.applies} of ${cov.total}` : "–"}</div>
-      <div class="small">lessons proven in markets like today${cov ? `. ${cov.unproven} unproven here.` : ""}</div></div>`;
+      <div class="big">${cov?.total != null ? `${cov.applies} of ${cov.total}` : "–"}</div>
+      <div class="small">lessons proven in markets like today${cov?.total != null ? `. ${cov.unproven} unproven here.` : ""}</div></div>`;
 }
 
 function renderAgent(a, s) {

@@ -30,6 +30,8 @@ SYSTEM = (
 SYSTEM_TARGET = (
     "You manage one US asset, long only. Each day, at the close, you choose your target position for tomorrow: "
     "IN = fully invested, OUT = in cash. The position changes at the next day's open, and every switch costs 0.05%. "
+    "You are judged on the next week's return (about 5 trading days), not the long run, so short-term moves "
+    "matter. You can change your mind on any day. "
     "You have two signals: RSI(2), where low values mean a sharp short-term dip that often bounces, "
     "and the 200-day average, where price below it means a downtrend. "
     "Past lessons are notes from your own earlier trades, each with its track record. "

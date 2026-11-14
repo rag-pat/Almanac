@@ -136,11 +136,12 @@ async def _decide_all(jobs, seed, concurrency, label, nb):
 
 
 def compute(dates: list, seed: int | None = None, concurrency: int = config.PRECOMPUTE_CONCURRENCY,
-            label: str = "precompute") -> int:
-    """Compute and store whatever is missing for these dates. Returns number of decisions computed."""
+            label: str = "precompute", nb: str | None = None) -> int:
+    """Compute and store whatever is missing for these dates. Returns number of decisions computed.
+    nb: notebook version to tag/check rows with (read once by the caller so it can't drift mid-request)."""
     if not dates:
         return 0
-    nb = notebook_version()
+    nb = nb or notebook_version()
     have = {(x["agent"], x["date"]) for x in coll().find(
         {"date": {"$gte": _to_dt(min(dates)), "$lte": _to_dt(max(dates))}, "seed": seed, "nb": nb},
         {"agent": 1, "date": 1})}
@@ -165,8 +166,9 @@ def compute(dates: list, seed: int | None = None, concurrency: int = config.PREC
 def load(start, end, seed: int | None = None) -> tuple[list, dict, dict]:
     """(trading days, market docs by date, decisions by (agent, date)) — computing anything missing first."""
     days = trading_days(start, end)
-    compute(days, seed, label="on-the-fly")
-    q = {"date": {"$gte": _to_dt(days[0]), "$lte": _to_dt(days[-1])}, "seed": seed, "nb": notebook_version()}
+    nb = notebook_version()  # read once: compute and read back with the same version
+    compute(days, seed, label="on-the-fly", nb=nb)
+    q = {"date": {"$gte": _to_dt(days[0]), "$lte": _to_dt(days[-1])}, "seed": seed, "nb": nb}
     market, dec = {}, {}
     for x in coll().find(q, {"_id": 0}):
         if x["agent"] == "_market":
