@@ -53,8 +53,25 @@ ZSTATS = {
     "credit": (-0.071571, 2.551652),
 }
 
-DEMO_MIN_START = "2013-01-01"
+NOTEBOOK_END = "2015-12-31"  # learning run trades 2007-2015 (z-stats still from 2007-2012 only)
+DEMO_MIN_START = "2016-01-01"
+
+# Lesson boxes + the almanac range rule
+BOX = 0.5           # starting half-width of each lesson's range around its fingerprint (and widen margin)
+IN_RANGE_MIN = 6    # almanac: lesson must contain today's value on >= 6 of 8 variables
 DEMO_MAX_DAYS = 60
+PRESETS = {
+    "late 2018": ("2018-10-01", "2018-12-24"),
+    "2020 crash": ("2020-02-10", "2020-05-01"),
+    "2022 bear": ("2022-08-15", "2022-11-04"),
+}
+
+# Learning run
+LEARN_AGENT = "learner"
+DECIDE_EVERY = 5        # trading days between decisions (weekly)
+EXPLORE_RATE = 0.10     # share of weeks where the action is forced to something different
+RETIRE_MIN_N = 5        # retire only after >= 5 scored uses...
+RETIRE_PROB = 0.9       # ...when P(theta < 0.5) > 0.9 with theta ~ Beta(1+wins, 1+losses)
 
 # Trading
 COST = 0.0005  # 5 bps per trade

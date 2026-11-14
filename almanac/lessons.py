@@ -14,7 +14,7 @@ from almanac.features import VARS
 
 COLL = "lessons"
 INDEX = "lessons_vector"
-BOX = 0.5  # starting half-width of each range around the fingerprint
+BOX = config.BOX
 
 NUM = {"bsonType": ["double", "int", "long"]}
 
@@ -99,8 +99,9 @@ def make_lesson(text: str, embedding: list[float], fp: dict, action: str, outcom
         "fp": {v: float(fp[v]) for v in VARS},
         "action": action,
         "outcome": outcome,
-        "wins": 1 if outcome == "win" else 0,
-        "losses": 1 if outcome == "loss" else 0,
+        # record tracks the lesson's ADVICE: it was right about the trade it came from (even a "this lost" warning)
+        "wins": 1,
+        "losses": 0,
         "status": "active",
         "learned_date": learned_date,
         "history": [{"event": "created", "date": learned_date, "outcome": outcome}],
@@ -113,7 +114,7 @@ def make_lesson(text: str, embedding: list[float], fp: dict, action: str, outcom
 
 # ---------- retrieval (the Atlas gate) ----------
 
-IN_RANGE_MIN = 6  # almanac: lesson must contain today's value on >= 6 of 8 variables
+IN_RANGE_MIN = config.IN_RANGE_MIN
 
 
 def _inside(v: str, zv: float) -> dict:
@@ -126,6 +127,8 @@ def _in_range_count(z: dict) -> dict:
 
 
 def _notebook_filter(before, agent_id: str) -> dict:
+    if not isinstance(before, datetime):
+        before = datetime.fromisoformat(str(before)[:10])
     return {"status": "active", "learned_date": {"$lt": before}, "agent_id": agent_id}
 
 

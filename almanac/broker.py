@@ -91,22 +91,29 @@ def score(action: str, r: float, cost: float = config.COST) -> str | None:
     return None
 
 
-def resolve_due(agent_id: str, today, horizon: int = config.HORIZON, session=None) -> list[dict]:
-    """Resolve every pending outcome that is >= `horizon` trading days old as of `today`.
-    R = close(t + horizon) / close(t) - 1, using only bars dated <= today."""
+def find_due(agent_id: str, today, horizon: int = config.HORIZON) -> list[tuple[dict, dict]]:
+    """Pending outcomes that are >= `horizon` trading days old as of `today`, with their computed result
+    (not yet written). R = close(t + horizon) / close(t) - 1, using only bars dated <= today."""
     today = _to_dt(today)
     bars = db.db()["bars"]
-    done = []
-    for o in outcomes().find({"agent_id": agent_id, "status": "pending", "decision_date": {"$lt": today}},
-                             session=session).sort("decision_date", ASCENDING):
+    due = []
+    for o in outcomes().find({"agent_id": agent_id, "status": "pending", "decision_date": {"$lt": today}}
+                             ).sort("decision_date", ASCENDING):
         later = list(bars.find({"symbol": "SPY", "date": {"$gt": o["decision_date"], "$lte": today}},
-                               {"close": 1, "date": 1}, session=session).sort("date", ASCENDING).limit(horizon))
+                               {"close": 1, "date": 1}).sort("date", ASCENDING).limit(horizon))
         if len(later) < horizon:
             continue
         exit_bar = later[horizon - 1]
         r = exit_bar["close"] / o["price"] - 1
-        result = score(o["action"], r)
-        upd = {"status": "resolved", "R": r, "outcome": result, "resolved_date": exit_bar["date"]}
-        outcomes().update_one({"_id": o["_id"]}, {"$set": upd}, session=session)
+        due.append((o, {"status": "resolved", "R": r, "outcome": score(o["action"], r),
+                        "resolved_date": exit_bar["date"]}))
+    return due
+
+
+def resolve_due(agent_id: str, today, horizon: int = config.HORIZON) -> list[dict]:
+    """find_due + write the results (used when no lesson updates need to share the transaction)."""
+    done = []
+    for o, upd in find_due(agent_id, today, horizon):
+        outcomes().update_one({"_id": o["_id"]}, {"$set": upd})
         done.append({**o, **upd})
     return done
