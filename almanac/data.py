@@ -49,6 +49,10 @@ def load_csv(symbol: str) -> pd.DataFrame:
     return pd.read_csv(csv_path(symbol), index_col="date", parse_dates=True)
 
 
+def load_all() -> dict[str, pd.DataFrame]:
+    return {s: load_csv(s) for s in config.SYMBOLS}
+
+
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else "download"
     if cmd == "download":
