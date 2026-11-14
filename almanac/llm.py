@@ -90,21 +90,19 @@ class LLMRefusal(RuntimeError):
 def llm_json(system: str, user: str, schema: dict, effort: str | None = None) -> dict:
     """One Claude call that must return JSON matching `schema`. Cached on disk by full input.
 
-    Note: Opus 5.5 rejects `temperature`, so determinism comes from the cache — the same prompt
-    always returns the same stored answer on reruns.
+    Note: current Claude models reject non-default `temperature`, so determinism comes from the
+    cache — the same prompt always returns the same stored answer on reruns.
     """
     effort = effort or config.LLM_EFFORT
     payload = {"model": config.LLM_MODEL, "effort": effort, "system": system, "user": user, "schema": schema}
 
     def call():
-        resp = _anthropic().beta.messages.create(
+        resp = _anthropic().messages.create(
             model=config.LLM_MODEL,
             max_tokens=16000,
             system=system,
             messages=[{"role": "user", "content": user}],
             output_config={"effort": effort, "format": {"type": "json_schema", "schema": schema}},
-            betas=["server-side-fallback-2026-07-01"],
-            fallbacks="default",  # if a safety classifier declines, the API retries on a fallback model
         )
         if resp.stop_reason == "refusal":
             raise LLMRefusal(str(resp.stop_details))
