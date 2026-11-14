@@ -4,11 +4,13 @@ Run:  python -m almanac.data download   # pull CSVs into data/
       python -m almanac.data load       # push CSVs into Atlas "bars"
 """
 import sys
+from datetime import datetime
 
 import pandas as pd
 import yfinance as yf
+from pymongo import ASCENDING, DESCENDING, UpdateOne
 
-from almanac import config
+from almanac import config, db
 
 COLS = ["open", "high", "low", "close", "volume"]
 
@@ -53,10 +55,72 @@ def load_all() -> dict[str, pd.DataFrame]:
     return {s: load_csv(s) for s in config.SYMBOLS}
 
 
+# ---------- Atlas ----------
+
+def _upsert(coll, docs, keys):
+    ops = [UpdateOne({k: d[k] for k in keys}, {"$set": d}, upsert=True) for d in docs]
+    for i in range(0, len(ops), 5000):
+        coll.bulk_write(ops[i:i + 5000], ordered=False)
+
+
+def load_to_atlas():
+    """Push CSV bars and annotated features into Atlas. Safe to rerun (upserts on unique keys)."""
+    from almanac.features import annotate
+
+    bars, feats = db.db()["bars"], db.db()["features"]
+    bars.create_index([("symbol", ASCENDING), ("date", ASCENDING)], unique=True)
+    feats.create_index([("date", ASCENDING)], unique=True)
+
+    frames = load_all()
+    for sym, df in frames.items():
+        docs = [{"symbol": sym, "date": d.to_pydatetime(), **{c: float(r[c]) for c in COLS}}
+                for d, r in df.iterrows()]
+        _upsert(bars, docs, ["symbol", "date"])
+        print(f"bars     {sym:5s} {bars.count_documents({'symbol': sym}):5d}")
+
+    ann = annotate(frames)
+    docs = []
+    for d, r in ann.iterrows():
+        doc = {"date": d.to_pydatetime(), "above200": bool(r["above200"]), "rsi2": float(r["rsi2"])}
+        doc.update({c: float(r[c]) for c in ann.columns if c not in ("above200", "rsi2")})
+        docs.append(doc)
+    _upsert(feats, docs, ["date"])
+    print(f"features {feats.count_documents({}):5d} days")
+
+
+def _to_dt(date) -> datetime:
+    return pd.Timestamp(date).to_pydatetime()
+
+
+def bars_until(date, symbol: str = "SPY", n: int | None = None) -> pd.DataFrame:
+    """THE gate for every price read: rows with date <= `date` only (optionally the last n)."""
+    cur = db.db()["bars"].find({"symbol": symbol, "date": {"$lte": _to_dt(date)}},
+                               {"_id": 0, "symbol": 0}).sort("date", DESCENDING)
+    if n:
+        cur = cur.limit(n)
+    df = pd.DataFrame(list(cur))
+    if df.empty:
+        return df
+    return df.set_index("date").sort_index()
+
+
+def features_until(date, n: int | None = None) -> pd.DataFrame:
+    """Annotated days with date <= `date` (values already use past data only)."""
+    cur = db.db()["features"].find({"date": {"$lte": _to_dt(date)}}, {"_id": 0}).sort("date", DESCENDING)
+    if n:
+        cur = cur.limit(n)
+    df = pd.DataFrame(list(cur))
+    if df.empty:
+        return df
+    return df.set_index("date").sort_index()
+
+
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else "download"
     if cmd == "download":
         download_all()
+    elif cmd == "load":
+        load_to_atlas()
     else:
         sys.exit(f"unknown command: {cmd}")
 
