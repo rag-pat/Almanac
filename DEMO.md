@@ -18,9 +18,9 @@ Point at: the four agent panels. Same model, same prompt, same costs. Only memor
 
 ## 0:35 Moment 1: Almanac hides a lesson plain memory trusts (30 s)
 
-Pick **2020 crash**, press Run, and let it play to early March.
+Pick **2020 crash**, press Run, let it finish (about 7 s), then **click March 5 on the price chart** to show that day's panels.
 
-> "March 5th, 2020. Plain memory goes **IN**. It cites a lesson that says *'buying a deeply oversold dip paid off'*, which has a perfect 1-and-0 record.
+> "March 5th, 2020. Plain memory goes **IN**. It cites a lesson that says *'buying a deeply oversold dip paid off'*, which has a perfect 1-and-0 record. See the gold tag: **hidden from Almanac**.
 >
 > Almanac **hides that lesson**. It's only been tested 0.3 times in conditions like this, so it's *unproven here*. Almanac stays **OUT**.
 >
@@ -30,11 +30,11 @@ Point at: the strip ("X of 81 lessons proven in markets like today") and the mem
 
 ## 1:05 Moment 2: Proof the memory drives the decision (25 s)
 
-Set the window to **2022-08-15 → 2022-11-04** (the 2022 bear preset) and Run. In the Almanac panel on **2022-08-26**, click **"Test: decide again without this lesson"** on the cited lesson.
+Click the **2022 bear** preset, let it finish, then **click August 26 on the price chart**. In the Almanac panel, click **"Test: decide again without this lesson"** on its first cited lesson (it takes about 10 seconds).
 
 > "Jackson Hole, August 26th, 2022. Almanac goes **OUT**, citing *'buying an oversold dip was a small loss, wait for confirmation'*. It was right 77% of the time in markets like this.
 >
-> We re-ask Claude ten times live. With the lesson: OUT 4 times out of 5. **Remove that one lesson: IN, 5 out of 5.** The memory is what made the call. The market fell another 3% that week."
+> We re-ask Claude ten times live. With the lesson it stays OUT (4 or 5 of 5 in our runs). **Remove that one lesson: IN, 5 out of 5.** The memory is what made the call. The market fell another 3% that week."
 
 ## 1:30 Moment 3: The result, honestly (20 s)
 
