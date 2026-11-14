@@ -225,17 +225,17 @@ def applicable_lessons(z: dict, before, agent_id: str = "learner") -> dict:
     return {str(r["_id"]): r["text"] for r in rows}
 
 
-def retrieve(z: dict, before, agent_id: str = "learner") -> dict:
+def retrieve(z: dict, before, agent_id: str = "learner", qvec: list[float] | None = None) -> dict:
     """One call per day: embed today's description, return what each agent type sees + coverage for the UI.
-    z: today's z-scores keyed by variable name. before: window start (only lessons learned earlier are visible)."""
+    z: today's z-scores keyed by variable name. before: window start (only lessons learned earlier are visible).
+    qvec: precomputed query embedding of describe(z) (batched precompute passes it in)."""
     from almanac.features import describe
     from almanac.llm import embed
 
-    if not isinstance(before, datetime):
-        before = datetime.fromisoformat(str(before))
+    before = _to_date(before)
     z = {v: float(z[f"z_{v}"] if f"z_{v}" in z else z[v]) for v in VARS}
     text = describe(z)
-    qvec = embed(text, "query")
+    qvec = qvec or embed(text, "query")
     return {
         "description": text,
         "relevant": search(qvec, z, before, almanac=False, agent_id=agent_id),  # plain + plain_ctx

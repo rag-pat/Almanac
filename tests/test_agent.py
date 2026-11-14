@@ -78,3 +78,12 @@ def test_none_mode_has_no_lessons_even_if_given_some():
     assert "No past lessons available." in user and "[L1]" not in user and ids == {}
     plain, _ = build_prompt("2020-03-16", {"in": False, "days": 0}, [CRASH_LOST], "plain")
     assert user.split("No past lessons")[0] == plain.split("Past lessons")[0]   # identical market section
+
+
+@pytest.mark.parametrize("mode", ["plain", "plain_ctx", "almanac", "none"])
+def test_target_prompt_is_position_independent_and_leak_free(mode):
+    from almanac.agent import SYSTEM_TARGET
+    user, _ = build_prompt("2020-03-16", None, [CRASH_LOST, CALM_WON], mode)
+    assert "You are currently" not in user and user.rstrip().endswith("Choose your target position for tomorrow: IN or OUT.")
+    text = SYSTEM_TARGET + "\n" + user
+    assert not re.search(r"\b(19|20)\d{2}\b", text) and "SPY" not in text

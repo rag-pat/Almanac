@@ -26,6 +26,17 @@ SYSTEM = (
     "If no lesson applies, decide from the signals alone. Cite only lesson IDs shown. "
     f"Keep the reason under {REASON_MAX_WORDS} words."
 )
+# Demo agents are position-independent: they pick tomorrow's target position; the simulator charges the cost
+SYSTEM_TARGET = (
+    "You manage one US asset, long only. Each day, at the close, you choose your target position for tomorrow: "
+    "IN = fully invested, OUT = in cash. The position changes at the next day's open, and every switch costs 0.05%. "
+    "You have two signals: RSI(2), where low values mean a sharp short-term dip that often bounces, "
+    "and the 200-day average, where price below it means a downtrend. "
+    "Past lessons are notes from your own earlier trades, each with its track record. "
+    "Use a lesson only if it applies to today. Trust lessons with better records more. "
+    "If no lesson applies, decide from the signals alone. Cite only lesson IDs shown. "
+    f"Keep the reason under {REASON_MAX_WORDS} words."
+)
 CTX_NOTE = ("Each lesson shows the market numbers (z-scores) on the day it was learned. "
             "Compare them with today's numbers and judge for yourself whether each lesson applies.")
 
@@ -39,17 +50,26 @@ def _day_number(date) -> int:
     return DAY_OFFSET + db.db()["bars"].count_documents({"symbol": "SPY", "date": {"$lte": _to_dt(date)}})
 
 
-def build_prompt(date, position: dict, lessons: list[dict], mode: str, feat: dict | None = None):
-    """Returns (user_prompt, id_map short->real). Nothing here may reveal the date, ticker or real prices."""
+def build_prompt(date, position: dict | None, lessons: list[dict], mode: str, feat: dict | None = None,
+                 ctx: dict | None = None):
+    """Returns (user_prompt, id_map short->real). Nothing here may reveal the date, ticker or real prices.
+    position=None -> position-independent prompt (asks for tomorrow's target). ctx may carry precomputed
+    'closes' (last 20 closes, oldest first) and 'day_number' to avoid per-call queries."""
     assert mode in MODES, mode
+    ctx = ctx or {}
     feat = feat or features_until(date, n=1).iloc[-1].to_dict()
     z = {v: float(feat[f"z_{v}"]) for v in VARS}
-    closes = bars_until(date, n=20)["close"]
-    rebased = ", ".join(f"{c / closes.iloc[0] * 100:.1f}" for c in closes)
-    state = "IN (fully invested)" if position["in"] else "OUT (in cash)"
+    closes = list(ctx["closes"]) if "closes" in ctx else list(bars_until(date, n=20)["close"])
+    rebased = ", ".join(f"{c / closes[0] * 100:.1f}" for c in closes)
+    day_no = ctx.get("day_number") or _day_number(date)
+    if position is None:
+        head = f"Asset X, day {day_no}."
+    else:
+        state = "IN (fully invested)" if position["in"] else "OUT (in cash)"
+        head = f"Asset X, day {day_no}. You are currently {state} for {position.get('days', 0)} days."
 
     lines = [
-        f"Asset X, day {_day_number(date)}. You are currently {state} for {position.get('days', 0)} days.",
+        head,
         "",
         f"Last {len(closes)} closes (rebased to 100): {rebased}",
         f"Conditions: {describe(z)}",
@@ -74,7 +94,8 @@ def build_prompt(date, position: dict, lessons: list[dict], mode: str, feat: dic
         if mode == "plain_ctx":
             line += f"\n     learned at: {_z_line(les['fp'])}"
         lines.append(line)
-    lines += ["", "Decide: buy, sell or hold."]
+    lines += ["", "Choose your target position for tomorrow: IN or OUT." if position is None
+              else "Decide: buy, sell or hold."]
     return "\n".join(lines), id_map
 
 
@@ -87,10 +108,10 @@ def _schema(short_ids: list[str]) -> dict:
 
 
 def decide(date, position: dict, lessons: list[dict], mode: str, feat: dict | None = None,
-           fresh: bool = False) -> dict:
+           fresh: bool = False, seed: int | None = None) -> dict:
     user, id_map = build_prompt(date, position, lessons, mode, feat)
     try:
-        out = llm_json(SYSTEM, user, _schema(list(id_map)), use_cache=not fresh)
+        out = llm_json(SYSTEM, user, _schema(list(id_map)), use_cache=not fresh, seed=seed)
     except (LLMRefusal, ValueError, KeyError, StopIteration) as e:  # bad/blocked output -> do nothing
         out = {"action": "hold", "cited": [], "reason": f"fallback: {type(e).__name__}"}
 
@@ -101,3 +122,27 @@ def decide(date, position: dict, lessons: list[dict], mode: str, feat: dict | No
     reason = " ".join(str(out.get("reason", "")).split()[:REASON_MAX_WORDS])
     return {"action": action, "raw_action": out.get("action"), "cited": [id_map[c] for c in cited_short],
             "cited_short": cited_short, "reason": reason, "n_lessons": len(lessons), "prompt": user}
+
+
+def _target_schema(short_ids: list[str]) -> dict:
+    cited = {"type": "array", "items": {"type": "string", "enum": short_ids} if short_ids else {"type": "string"}}
+    return {"type": "object",
+            "properties": {"target": {"type": "string", "enum": ["IN", "OUT"]}, "cited": cited,
+                           "reason": {"type": "string"}},
+            "required": ["target", "cited", "reason"], "additionalProperties": False}
+
+
+def decide_target(date, lessons: list[dict], mode: str, feat: dict | None = None, ctx: dict | None = None,
+                  fresh: bool = False, seed: int | None = None) -> dict:
+    """Position-independent demo decision: tomorrow's target, IN or OUT. A blocked/broken answer -> target None
+    (the simulator keeps the current position). API errors (rate limits) propagate so callers can retry."""
+    user, id_map = build_prompt(date, None, lessons, mode, feat, ctx)
+    try:
+        out = llm_json(SYSTEM_TARGET, user, _target_schema(list(id_map)), use_cache=not fresh, seed=seed)
+    except (LLMRefusal, ValueError, KeyError, StopIteration) as e:
+        out = {"target": None, "cited": [], "reason": f"fallback: {type(e).__name__}"}
+    target = out.get("target") if out.get("target") in ("IN", "OUT") else None
+    cited_short = [c for c in out.get("cited", []) if c in id_map]
+    reason = " ".join(str(out.get("reason", "")).split()[:REASON_MAX_WORDS])
+    return {"target": target, "cited": [id_map[c] for c in cited_short], "cited_short": cited_short,
+            "reason": reason, "n_lessons": 0 if mode == "none" else len(lessons)}

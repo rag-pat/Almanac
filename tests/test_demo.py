@@ -24,7 +24,25 @@ def test_window_rules():
     from almanac.demo import window_days
     with pytest.raises(ValueError):
         window_days("2014-01-02", "2014-02-01")          # before demo start (notebook period)
-    days = window_days("2018-01-02", "2018-12-31")
-    assert len(days) == config.DEMO_MAX_DAYS             # capped at 60 trading days
-    for name, (s, e) in config.PRESETS.items():
-        assert 50 <= len(window_days(s, e)) <= 60, name
+    with pytest.raises(ValueError):
+        window_days("2024-06-03", "2025-03-01")          # past the end of the data
+    assert len(window_days("2018-01-02", "2018-12-31")) > 240   # no length cap any more
+
+
+@pytest.mark.skipif(not config.MONGODB_URI, reason="no Atlas URI")
+def test_simulator_charges_cost_only_when_target_changes(monkeypatch):
+    """Targets: IN, IN, OUT, OUT. Fill at next open; one buy (day 1 open) and one sell (day 3 open)."""
+    import almanac.demo as demo
+    from almanac.data import load_csv
+    days = list(load_csv("SPY").loc["2019-03-01":].index[:5])
+    targets = ["IN", "IN", "OUT", "OUT", "OUT"]
+    dec = {(a, d.to_pydatetime()): {"target": t, "reason": "", "cited": [], "n_lessons": 0}
+           for d, t in zip(days, targets) for a in demo.AGENTS}
+    monkeypatch.setattr(demo, "load", lambda s, e, seed=None: (days, {}, dec))
+    sim = demo.simulate(days[0], days[-1])
+    spy = load_csv("SPY")
+    expected = (1 - config.COST) ** 2 * spy.loc[days[3], "open"] / spy.loc[days[1], "open"]
+    rec = sim["days"]
+    assert [r["agents"]["almanac"]["action"] for r in rec] == ["buy", "stay_in", "sell", "stay_out", "stay_out"]
+    assert rec[-1]["agents"]["almanac"]["equity"] == pytest.approx(expected, abs=1e-5)  # streamed equity is rounded to 5 dp
+    assert sim["metrics"]["almanac"]["trades"] == 2

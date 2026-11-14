@@ -87,7 +87,8 @@ class LLMRefusal(RuntimeError):
     pass
 
 
-def llm_json(system: str, user: str, schema: dict, effort: str | None = None, use_cache: bool = True) -> dict:
+def llm_json(system: str, user: str, schema: dict, effort: str | None = None, use_cache: bool = True,
+             seed: int | None = None) -> dict:
     """One Claude call that must return JSON matching `schema`. Cached on disk by full input
     (use_cache=False forces a fresh call — the counterfactual uses this to measure real variation).
 
@@ -96,6 +97,8 @@ def llm_json(system: str, user: str, schema: dict, effort: str | None = None, us
     """
     effort = effort or config.LLM_EFFORT
     payload = {"model": config.LLM_MODEL, "effort": effort, "system": system, "user": user, "schema": schema}
+    if seed is not None:  # a seeded variant: a separate cached sample of the same prompt (for variance runs)
+        payload["seed"] = seed
 
     def call():
         resp = _anthropic().messages.create(
@@ -111,6 +114,27 @@ def llm_json(system: str, user: str, schema: dict, effort: str | None = None, us
         return json.loads(text)
 
     return cached("llm", payload, call) if use_cache else call()
+
+
+def embed_many(texts: list[str], kind: str = "document", batch: int = 128) -> list[list[float]]:
+    """Batched embed(): cached texts are read from disk, the rest go to the API in batches of `batch`."""
+    out: dict[str, list[float]] = {}
+    missing = []
+    for t in dict.fromkeys(texts):
+        p = _cache_path("embed", {"model": config.EMBED_MODEL, "input_type": kind, "text": t})
+        if p.exists():
+            out[t] = json.loads(p.read_text())
+        else:
+            missing.append(t)
+    for i in range(0, len(missing), batch):
+        chunk = missing[i:i + batch]
+        r = _post(config.EMBED_URL, {"input": chunk, "model": config.EMBED_MODEL, "input_type": kind},
+                  config.VOYAGE_API_KEY)
+        for t, d in zip(chunk, sorted(r["data"], key=lambda d: d["index"])):
+            out[t] = d["embedding"]
+            _cache_path("embed", {"model": config.EMBED_MODEL, "input_type": kind, "text": t}).write_text(
+                json.dumps(d["embedding"]))
+    return [out[t] for t in texts]
 
 
 def cosine(a, b) -> float:

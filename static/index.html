@@ -127,7 +127,7 @@ td.best { color: var(--alm); font-weight: 600; }
       <button id="run">Run</button>
     </div>
   </header>
-  <p id="status" role="status">Pick a window from 2016 onward (up to 60 trading days), then press Run.</p>
+  <p id="status" role="status">Pick any window from 2016 to 2024, then press Run.</p>
 
   <section class="strip" id="strip" aria-label="Today's market conditions"></section>
 
@@ -196,12 +196,13 @@ function renderAgent(a, s) {
   const el = $(`.agent[data-a=${a}] .body`);
   if (!s) { el.innerHTML = `<div class="verdict"><span class="act">–</span></div><p class="reason"></p>`; return; }
   const test = l => a === "almanac" && s.day
-    ? `<br><button class="cf" data-id="${l.id}" data-date="${s.day}" data-start="${s.start}" data-inv="${s.invested_at_decision}" data-days="${s.days_in_state}">Test: decide again without this lesson</button><div class="cf-out"></div>` : "";
+    ? `<br><button class="cf" data-id="${l.id}" data-date="${s.day}">Test: decide again without this lesson</button><div class="cf-out"></div>` : "";
   const rec = l => a === "almanac" ? `${Math.round(l.A * 100)}% here, ${l.n_eff.toFixed(1)} similar uses` : `${l.wins}W/${l.losses}L`;
   const cited = s.cited.length ? s.cited.map(l => `<li><span class="rec">${rec(l)}</span> ${esc(l.text)}${test(l)}</li>`).join("")
     : `<li class="empty">${a === "none" ? "Has no memory. Decides from the chart and signals." : s.n_lessons ? "Cited no lessons today." : "No lessons to read today. Deciding from signals."}</li>`;
   const prev = el.dataset.act;
-  el.innerHTML = `<div class="verdict"><span class="act ${prev && prev !== s.action ? "flash" : ""}">${s.action.toUpperCase()}</span>
+  const label = { buy: "BUY", sell: "SELL", stay_in: "STAY IN", stay_out: "STAY OUT" }[s.action] || "–";
+  el.innerHTML = `<div class="verdict"><span class="act ${prev && prev !== s.action ? "flash" : ""}">${label}</span>
       <span class="eq">${s.equity.toFixed(3)}</span><span class="pos">${s.invested ? "Invested" : "In cash"}</span></div>
     <p class="reason">${esc(s.reason)}</p>
     <div class="saw">Saw ${s.n_lessons} lesson${s.n_lessons === 1 ? "" : "s"}, cited ${s.cited.length}</div>
@@ -237,6 +238,35 @@ function renderEnd(msg) {
         return `<tr><td>${label}</td>${cols.map(c => `<td class="${rank && c !== "benchmark" && m[c][k] === best ? "best" : ""}">${fmt(m[c][k])}</td>`).join("")}</tr>`;
       }).join("")}</tbody></table>`;
   $("#endcard").classList.add("show");
+  renderSweep(msg);
+}
+
+// offline sweep (12 windows) shown under the live run, so one window isn't the whole story
+async function renderSweep(msg) {
+  let s;
+  try { s = await (await fetch("/sweep")).json(); } catch (_) { return; }
+  if (!s.windows) return;
+  const cols = [...AGENTS, "buy_hold"].filter(a => s.agents[a]);
+  const name = c => c === "buy_hold" ? "Buy and hold" : NAMES[c];
+  const best = k => Math.max(...AGENTS.filter(a => s.agents[a]).map(a => s.agents[a][k]));
+  const cell = (c, k, fmt) => `<td class="${c !== "buy_hold" && s.agents[c][k] === best(k) ? "best" : ""}">${fmt(s.agents[c][k])}</td>`;
+  const alm = s.agents.almanac;
+  // mean ± std for this window if it is a preset with sampled variance runs
+  const start = $("#start").value;
+  const preset = Object.entries(s.windows_list).find(([, [ws]]) => ws === start)?.[0];
+  const v = preset && s.variance[preset];
+  const varRow = v ? `<tr><td>This window, ${v.almanac?.runs ?? 0} sampled runs</td>${cols.map(c =>
+      `<td>${v[c] ? `${pct(v[c].mean)} ± ${pct(v[c].std)}` : "–"}</td>`).join("")}</tr>` : "";
+  $("#endcard").insertAdjacentHTML("beforeend", `
+    <h2 style="margin-top:22px">Across ${s.windows} windows from 2016 to 2024</h2>
+    <p>Offline sweep, same agents and costs. ${alm ? `Almanac beat plain memory in ${alm.beat_plain} of ${alm.n} windows.` : ""}</p>
+    <table><thead><tr><th></th>${cols.map(c => `<th>${name(c)}</th>`).join("")}</tr></thead><tbody>
+      <tr><td>Mean return</td>${cols.map(c => cell(c, "mean_return", pct)).join("")}</tr>
+      <tr><td>Mean max drawdown</td>${cols.map(c => cell(c, "mean_max_drawdown", pct)).join("")}</tr>
+      <tr><td>Mean Sharpe</td>${cols.map(c => cell(c, "mean_sharpe", num)).join("")}</tr>
+      <tr><td>Beat plain memory</td>${cols.map(c => `<td>${s.agents[c].beat_plain == null ? "–" : `${s.agents[c].beat_plain} of ${s.agents[c].n}`}</td>`).join("")}</tr>
+      ${varRow}
+    </tbody></table>`);
 }
 
 // ---------- run ----------
@@ -254,30 +284,37 @@ function run() {
   if (source) source.close();
   reset();
   $("#run").disabled = true;
-  $("#status").textContent = "Starting. The first day takes up to 30 seconds while the agents warm up.";
+  $("#status").textContent = "Loading decisions…";
   const markers = [];
-  let n = 0, firstClose = null;
+  let n = 0, total = 0, firstClose = null;
   source = new EventSource(`/run?start=${start}&end=${end}`);
-  source.addEventListener("day", ev => {
-    const d = JSON.parse(ev.data); n++;
-    firstClose ??= d.ohlc.close;
-    candles.update({ time: d.date, ...d.ohlc });
-    bench.update({ time: d.date, value: d.ohlc.close / firstClose });
-    AGENTS.forEach((a, i) => {
-      const s = d.agents[a];
-      // position the agent held when it decided (an order placed today only fills tomorrow)
-      s.day = d.date; s.start = d.window_start; s.invested_at_decision = s.invested;
-      eqLines[a].update({ time: d.date, value: s.equity });
-      // orders are placed at today's close; mark the decision day
-      if (s.action === "buy") markers.push({ time: d.date, position: "belowBar", color: COLORS[a], shape: "arrowUp", text: "" });
-      if (s.action === "sell") markers.push({ time: d.date, position: "aboveBar", color: COLORS[a], shape: "arrowDown", text: "" });
-      renderAgent(a, s);
-    });
+  source.addEventListener("start", ev => {
+    const m = JSON.parse(ev.data); total = m.n_days;
+    $("#status").textContent = `Replaying ${total} trading days (prepared in ${m.prep_seconds}s).`;
+  });
+  // each message carries a chunk of days; the server paces chunks so any window plays in a few seconds
+  source.addEventListener("days", ev => {
+    const chunk = JSON.parse(ev.data).days;
+    for (const d of chunk) {
+      n++;
+      firstClose ??= d.ohlc.close;
+      candles.update({ time: d.date, ...d.ohlc });
+      bench.update({ time: d.date, value: d.ohlc.close / firstClose });
+      AGENTS.forEach(a => {
+        const s = d.agents[a];
+        eqLines[a].update({ time: d.date, value: s.equity });
+        // decided at today's close, fills at tomorrow's open; mark the decision day
+        if (s.action === "buy") markers.push({ time: d.date, position: "belowBar", color: COLORS[a], shape: "arrowUp", text: "" });
+        if (s.action === "sell") markers.push({ time: d.date, position: "aboveBar", color: COLORS[a], shape: "arrowDown", text: "" });
+      });
+      addEvents(d.date, d.events);
+    }
+    const d = chunk[chunk.length - 1];
+    AGENTS.forEach(a => { d.agents[a].day = d.date; renderAgent(a, d.agents[a]); });
     candles.setMarkers(markers);
     candleChart.timeScale().fitContent(); eqChart.timeScale().fitContent();
     renderStrip(d.variables, d.coverage);
-    addEvents(d.date, d.events);
-    $("#status").textContent = `Day ${n}: ${d.date}. ${d.description}`;
+    $("#status").textContent = `Day ${n} of ${total}: ${d.date}. ${d.description}`;
   });
   source.addEventListener("end", ev => {
     const msg = JSON.parse(ev.data);
@@ -297,8 +334,7 @@ document.addEventListener("click", async ev => {
   const b = ev.target.closest(".cf"); if (!b) return;
   const out = b.nextElementSibling;
   b.disabled = true; out.textContent = "Asking the agent 10 more times, about 10 seconds…";
-  const q = new URLSearchParams({ date: b.dataset.date, start: b.dataset.start, lesson_id: b.dataset.id,
-                                  invested: b.dataset.inv, days: b.dataset.days });
+  const q = new URLSearchParams({ date: b.dataset.date, lesson_id: b.dataset.id });
   try {
     const r = await fetch(`/counterfactual?${q}`);
     const j = await r.json();

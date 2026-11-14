@@ -92,27 +92,39 @@ def _to_dt(date) -> datetime:
     return pd.Timestamp(date).to_pydatetime()
 
 
-def bars_until(date, symbol: str = "SPY", n: int | None = None) -> pd.DataFrame:
-    """THE gate for every price read: rows with date <= `date` only (optionally the last n)."""
-    cur = db.db()["bars"].find({"symbol": symbol, "date": {"$lte": _to_dt(date)}},
-                               {"_id": 0, "symbol": 0}).sort("date", DESCENDING)
+def bars_until(date, symbol: str = "SPY", n: int | None = None, since=None) -> pd.DataFrame:
+    """THE gate for every price read: rows with date <= `date` only (optionally the last n, or from `since`)."""
+    q = {"$lte": _to_dt(date)}
+    if since is not None:
+        q["$gte"] = _to_dt(since)
+    cur = db.db()["bars"].find({"symbol": symbol, "date": q}, {"_id": 0, "symbol": 0}).sort("date", DESCENDING)
     if n:
         cur = cur.limit(n)
     df = pd.DataFrame(list(cur))
     if df.empty:
         return df
     return df.set_index("date").sort_index()
+
+
+_FEATURES: pd.DataFrame | None = None
+
+
+def _features_all() -> pd.DataFrame:
+    """All annotated days, loaded from Atlas once per process (the collection is static after `load`)."""
+    global _FEATURES
+    if _FEATURES is None:
+        df = pd.DataFrame(list(db.db()["features"].find({}, {"_id": 0})))
+        _FEATURES = df.set_index("date").sort_index() if not df.empty else df
+    return _FEATURES
 
 
 def features_until(date, n: int | None = None) -> pd.DataFrame:
     """Annotated days with date <= `date` (values already use past data only)."""
-    cur = db.db()["features"].find({"date": {"$lte": _to_dt(date)}}, {"_id": 0}).sort("date", DESCENDING)
-    if n:
-        cur = cur.limit(n)
-    df = pd.DataFrame(list(cur))
+    df = _features_all()
     if df.empty:
         return df
-    return df.set_index("date").sort_index()
+    df = df.loc[:_to_dt(date)]
+    return df.iloc[-n:] if n else df
 
 
 def main():

@@ -1,28 +1,28 @@
-"""M6: demo engine — 4 agents trade the same window daily on the frozen notebook (read only), in parallel.
+"""Demo engine — 4 agents on the frozen notebook, replayed from precomputed `daily_decisions`.
 
   none       same prompt and signals, no lessons at all (memory-free baseline)
-  plain      all relevant lessons (text)
+  plain      all relevant lessons, overall W/L
   plain_ctx  all relevant lessons + fingerprints, judges relevance itself
-  almanac    relevant lessons that are in range (>= IN_RANGE_MIN of 8)
+  almanac    lessons with a good conditional track record in markets like today
 
-Each day's variables are written to `market_state`; a change stream on it turns them into
-"lessons entered / left range" events for the almanac agent. run_demo() yields one dict per day.
+Each agent's daily answer is a target (IN / OUT) for tomorrow; the simulator fills at the next open and
+charges the 0.05% cost when the target changes. Any window from 2016 works (no length cap); missing days are
+computed on the fly. Each day's state is written to `market_state`; a change stream on it turns the stored
+"lessons that apply" sets into "now apply / stopped applying" events.
 """
-import queue
+import math
 import threading
+import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 from almanac import config, db
-from almanac.agent import decide
 from almanac.broker import Broker
-from almanac.data import _to_dt, features_until
-from almanac.features import VARS
-from almanac.lessons import applicable_lessons, coll as lessons_coll, retrieve
+from almanac.daily import AGENTS, load, trading_days
+from almanac.data import _to_dt, bars_until
+from almanac.lessons import coll as lessons_coll
 from almanac.metrics import summarize
 
-AGENTS = ("none", "plain", "plain_ctx", "almanac")
 NOTEBOOK = config.LEARN_AGENT
 
 
@@ -33,126 +33,133 @@ def market_state():
 def window_days(start, end) -> list:
     if _to_dt(start) < _to_dt(config.DEMO_MIN_START):
         raise ValueError(f"demo windows start on or after {config.DEMO_MIN_START}")
-    days = list(features_until(end).loc[start:end].index)
+    if _to_dt(end) > _to_dt(config.DEMO_END):
+        raise ValueError(f"data ends on {config.DEMO_END}")
+    days = trading_days(start, end)
     if not days:
         raise ValueError("no trading days in window")
-    return days[:config.DEMO_MAX_DAYS]
+    return days
 
 
-class RangeWatcher(threading.Thread):
-    """Change stream on market_state: for each new day, diff the set of in-range lessons vs the previous day."""
-
-    def __init__(self, run_id: str, before):
-        super().__init__(daemon=True)
-        self.run_id, self.before = run_id, before
-        self.out: queue.Queue = queue.Queue()
-        self.ready = threading.Event()
-        self.stop = threading.Event()
-
-    def run(self):
-        pipeline = [{"$match": {"operationType": "insert", "fullDocument.run_id": self.run_id}}]
-        prev = None
-        with market_state().watch(pipeline, max_await_time_ms=300) as stream:
-            self.ready.set()
-            while not self.stop.is_set():
-                ch = stream.try_next()
-                if ch is None:
-                    continue
-                doc = ch["fullDocument"]
-                z = {v: doc[f"z_{v}"] for v in VARS}
-                now = applicable_lessons(z, self.before, NOTEBOOK)
-                events = []
-                if prev is None:
-                    events.append({"kind": "baseline", "text": f"{len(now)} lessons have a good record in markets like this"})
-                else:
-                    entered, left = set(now) - set(prev), set(prev) - set(now)
-                    if entered:
-                        events.append({"kind": "entered", "text": f"{len(entered)} lesson(s) now apply",
-                                       "lessons": [now[i] for i in list(entered)[:3]]})
-                    if left:
-                        events.append({"kind": "left", "text": f"{len(left)} lesson(s) stopped applying",
-                                       "lessons": [prev[i] for i in list(left)[:3]]})
-                prev = now
-                self.out.put((doc["date"], events))
-
-
-def _lesson_view(les: dict) -> dict:
-    return {"id": str(les["_id"]), "text": les["text"], "wins": les["wins"], "losses": les["losses"],
-            "score": round(2 * les.get("score", 0.5) - 1, 3), "in_range": les.get("in_range"),
-            "A": round(les.get("A", 0.5), 3), "n_eff": round(les.get("n_eff", 0.0), 2)}
-
-
-def run_demo(start, end):
-    days = window_days(start, end)
-    before = _to_dt(days[0])
-    run_id = uuid.uuid4().hex[:12]
-    feats = features_until(days[-1])
+def simulate(start, end, seed: int | None = None) -> dict:
+    """Replay stored decisions through 4 brokers. Returns per-day records + end metrics."""
+    days, market, dec = load(start, end, seed)
+    bars = bars_until(days[-1], since=days[0])
     brokers = {a: Broker() for a in AGENTS}
     invested_days = {a: 0 for a in AGENTS}
-    closes, prev_unfamiliar = [], []
-    notebook_total = lessons_coll().count_documents({"agent_id": NOTEBOOK, "learned_date": {"$lt": before}})
+    closes, records = [], []
+    for d in days:
+        key = d.to_pydatetime()
+        b = bars.loc[d]
+        for a, br in brokers.items():
+            br.on_open(d, float(b["open"]))
+            br.on_close(d, float(b["close"]))
+            invested_days[a] += br.invested
+        closes.append(float(b["close"]))
+        agents = {}
+        for a, br in brokers.items():
+            x = dec.get((a, key), {})
+            target, was_in = x.get("target"), br.invested
+            if target == "IN":
+                action = "stay_in" if was_in else "buy"
+            elif target == "OUT":
+                action = "sell" if was_in else "stay_out"
+            else:  # no usable answer: keep the position
+                action = "stay_in" if was_in else "stay_out"
+            br.order({"buy": "buy", "sell": "sell"}.get(action, "hold"))
+            agents[a] = {"action": action, "target": target, "reason": x.get("reason", ""),
+                         "invested": was_in, "equity": round(br.equity[-1][1], 5),
+                         "n_lessons": x.get("n_lessons", 0), "cited": x.get("cited", [])}
+        m = market.get(key, {})
+        records.append({"date": f"{d:%Y-%m-%d}",
+                        "ohlc": {k: float(b[k]) for k in ("open", "high", "low", "close")},
+                        "variables": m.get("variables", {}), "signals": m.get("signals", {}),
+                        "description": m.get("description", ""), "coverage": m.get("coverage", {}),
+                        "applies": m.get("applies", []), "agents": agents})
+    bench = [c / closes[0] for c in closes]
+    return {"days": records,
+            "metrics": {a: summarize([e for _, e in br.equity], br.trades, invested_days[a], closes)
+                        for a, br in brokers.items()},
+            "benchmark": summarize(bench, [{"action": "buy", "price": closes[0]}], len(days), closes)}
 
-    watcher = RangeWatcher(run_id, before)
+
+def diff_events(prev: set | None, now: set, texts: dict) -> list:
+    if prev is None:
+        return [{"kind": "baseline", "text": f"{len(now)} lessons have a good record in markets like this"}]
+    out = []
+    entered, left = now - prev, prev - now
+    if entered:
+        out.append({"kind": "entered", "text": f"{len(entered)} lesson(s) now apply",
+                    "lessons": [texts.get(i, "") for i in list(entered)[:3]]})
+    if left:
+        out.append({"kind": "left", "text": f"{len(left)} lesson(s) stopped applying",
+                    "lessons": [texts.get(i, "") for i in list(left)[:3]]})
+    return out
+
+
+class EventWatcher(threading.Thread):
+    """Change stream on market_state: diff each day's 'applies' set against the previous day."""
+
+    def __init__(self, run_id: str, texts: dict, n: int):
+        super().__init__(daemon=True)
+        self.run_id, self.texts, self.n = run_id, texts, n
+        self.events: dict[str, list] = {}
+        self.ready, self.done = threading.Event(), threading.Event()
+
+    def run(self):
+        prev = None
+        pipeline = [{"$match": {"operationType": "insert", "fullDocument.run_id": self.run_id}}]
+        try:
+            with market_state().watch(pipeline, max_await_time_ms=200) as stream:
+                self.ready.set()
+                t0 = time.time()
+                while len(self.events) < self.n and time.time() - t0 < 15:
+                    ch = stream.try_next()
+                    if ch is None:
+                        continue
+                    doc = ch["fullDocument"]
+                    now = set(doc.get("applies", []))
+                    self.events[doc["day"]] = diff_events(prev, now, self.texts)
+                    prev = now
+        finally:
+            self.ready.set()
+            self.done.set()
+
+
+def stream_demo(start, end, seed: int | None = None):
+    """Yield SSE-ready messages: start, days (chunks paced to ~STREAM_SECONDS total), end."""
+    t0 = time.time()
+    sim = simulate(start, end, seed)
+    recs = sim["days"]
+    texts = {str(l["_id"]): l["text"] for l in lessons_coll().find(
+        {"agent_id": NOTEBOOK, "learned_date": {"$lt": _to_dt(config.NOTEBOOK_CUTOFF)}}, {"text": 1})}
+
+    # events via change stream: bulk-insert this window's market_state, the watcher diffs the 'applies' sets
+    run_id = uuid.uuid4().hex[:12]
+    watcher = EventWatcher(run_id, texts, len(recs))
     watcher.start()
     watcher.ready.wait(10)
-    pool = ThreadPoolExecutor(len(AGENTS))
-    try:
-        for day in days:
-            bars = {a: b.step(day) for a, b in brokers.items()}
-            bar = bars["almanac"]
-            closes.append(bar["close"])
-            for a, b in brokers.items():
-                invested_days[a] += b.invested
-            feat = feats.loc[day].to_dict()
-            z = {v: float(feat[f"z_{v}"]) for v in VARS}
+    market_state().insert_many([{"run_id": run_id, "day": r["date"], "date": _to_dt(r["date"]),
+                                 "variables": r["variables"], "applies": r["applies"], "at": datetime.utcnow()}
+                                for r in recs])
+    watcher.done.wait(15)
+    prev, prev_unf = None, []
+    for r in recs:  # fallback for any event the stream didn't deliver in time
+        now = set(r["applies"])
+        r["events"] = list(watcher.events.get(r["date"]) or diff_events(prev, now, texts))
+        prev = now
+        unf = r["coverage"].get("unfamiliar", [])
+        if unf and unf != prev_unf:
+            r["events"].append({"kind": "unfamiliar", "text": "unfamiliar conditions: " + ", ".join(unf)})
+        prev_unf = unf
+        r.pop("applies", None)
 
-            market_state().insert_one({"run_id": run_id, "date": _to_dt(day), "at": datetime.utcnow(),
-                                       **{f"z_{v}": z[v] for v in VARS},
-                                       "rsi2": float(feat["rsi2"]), "above200": bool(feat["above200"])})
-            r = retrieve(z, before, agent_id=NOTEBOOK)
-            seen = {"none": [], "plain": r["relevant"], "plain_ctx": r["relevant"], "almanac": r["almanac"]}
-            futures = {a: pool.submit(decide, day, brokers[a].position, seen[a], a, feat) for a in AGENTS}
-            decisions = {a: f.result() for a, f in futures.items()}
-
-            agents_out = {}
-            for a in AGENTS:
-                d = decisions[a]
-                pos_at_decision = brokers[a].position
-                brokers[a].order(d["action"])
-                by_id = {str(x["_id"]): x for x in seen[a]}
-                agents_out[a] = {"action": d["action"], "intent": d["raw_action"], "reason": d["reason"],
-                                 "invested": brokers[a].invested, "equity": bar_eq(brokers[a]),
-                                 "days_in_state": pos_at_decision["days"],
-                                 "n_lessons": len(seen[a]),
-                                 "cited": [_lesson_view(by_id[c]) for c in d["cited"] if c in by_id]}
-
-            events = []
-            try:
-                _, events = watcher.out.get(timeout=10)
-            except queue.Empty:
-                events = [{"kind": "warn", "text": "change stream event not received"}]
-            if r["unfamiliar"] != prev_unfamiliar and r["unfamiliar"]:
-                events.append({"kind": "unfamiliar", "text": "unfamiliar conditions: " + ", ".join(r["unfamiliar"])})
-            prev_unfamiliar = r["unfamiliar"]
-
-            yield {"type": "day", "run_id": run_id, "date": f"{day:%Y-%m-%d}", "window_start": f"{days[0]:%Y-%m-%d}",
-                   "ohlc": {k: bar[k] for k in ("open", "high", "low", "close")},
-                   "variables": {v: round(z[v], 2) for v in VARS},
-                   "signals": {"rsi2": round(float(feat["rsi2"]), 1), "above200": bool(feat["above200"])},
-                   "description": r["description"],
-                   "coverage": {"applies": r["n_applies"], "unproven": r["n_unproven"], "total": notebook_total,
-                                "relevant": len(r["relevant"]), "unfamiliar": r["unfamiliar"]},
-                   "agents": agents_out, "events": events}
-
-        bench = [c / closes[0] for c in closes]
-        yield {"type": "end", "run_id": run_id, "days": len(days),
-               "metrics": {a: summarize([e for _, e in b.equity], b.trades, invested_days[a], closes)
-                           for a, b in brokers.items()},
-               "benchmark": summarize(bench, [{"action": "buy", "price": closes[0]}], len(days), closes)}
-    finally:
-        watcher.stop.set()
-        pool.shutdown(wait=False)
-
-
-def bar_eq(b: Broker) -> float:
-    return round(b.equity[-1][1], 5)
+    yield {"type": "start", "n_days": len(recs), "prep_seconds": round(time.time() - t0, 1),
+           "from_stream": len(watcher.events)}
+    frames = min(len(recs), 140)
+    size = math.ceil(len(recs) / frames)
+    n_frames = math.ceil(len(recs) / size)
+    for i in range(0, len(recs), size):
+        yield {"type": "days", "days": recs[i:i + size]}
+        time.sleep(config.STREAM_SECONDS / n_frames)
+    yield {"type": "end", "days": len(recs), "metrics": sim["metrics"], "benchmark": sim["benchmark"]}

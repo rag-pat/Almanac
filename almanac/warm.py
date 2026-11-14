@@ -6,13 +6,13 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 from almanac import config
-from almanac.demo import run_demo
+from almanac.demo import simulate
 
 
 def warm_one(name, start, end):
-    t0, last = time.time(), None
-    for msg in run_demo(start, end):
-        last = msg
+    t0 = time.time()
+    last = simulate(start, end)
+    last["days"] = len(last["days"])
     m = last["metrics"]
     line = "  ".join(f"{a}: {m[a]['total_return']:+.1%} (DD {m[a]['max_drawdown']:.1%})" for a in m)
     return f"{name:11s} {last['days']} days in {time.time() - t0:.0f}s | {line} | buy&hold {last['benchmark']['total_return']:+.1%}"

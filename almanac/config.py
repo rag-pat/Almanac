@@ -65,7 +65,11 @@ IN_RANGE_MIN = 6    # (legacy box rule; boxes now only drive the "unfamiliar con
 KERNEL_H = 1.5      # similarity bandwidth in z-units
 A_MIN = 0.55        # show a lesson only if it worked at least this often in markets like today...
 NEFF_MIN = 1.0      # ...based on at least this much similar evidence (below = "unproven here")
-DEMO_MAX_DAYS = 60
+DEMO_MAX_DAYS = 60            # sweep window length; /run itself has no cap
+DEMO_END = "2024-12-31"
+NOTEBOOK_CUTOFF = "2016-01-01"  # demo sees only lessons AND evidence dated before this
+PRECOMPUTE_CONCURRENCY = 32   # parallel LLM calls when precomputing daily_decisions
+STREAM_SECONDS = 7.0          # total animation time for /run, whatever the window length
 PRESETS = {
     "late 2018": ("2018-10-01", "2018-12-24"),
     "2020 crash": ("2020-02-10", "2020-05-01"),
