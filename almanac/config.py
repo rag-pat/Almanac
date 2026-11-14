@@ -14,7 +14,7 @@ MONGODB_URI = os.getenv("MONGODB_URI", "")
 MONGODB_DB = os.getenv("MONGODB_DB", "almanac")
 
 # Data
-SYMBOLS = ["SPY", "^VIX", "^TNX"]
+SYMBOLS = ["SPY", "^VIX", "^TNX", "^IRX", "LQD", "IEF"]
 DATA_START = "2005-01-01"
 DATA_END = "2025-01-01"
 
