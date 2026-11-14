@@ -19,6 +19,11 @@ EMBED_URL = "https://ai.mongodb.com/v1/embeddings"
 EMBED_MODEL = "voyage-4"
 EMBED_DIM = 1024
 
+# LLM: Claude via the Anthropic SDK (the ONE swap point is llm.llm_json)
+CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY", "")
+LLM_MODEL = "claude-opus-5-5"
+LLM_EFFORT = "low"  # thinking can't be disabled on Opus 5.5; low effort keeps calls fast
+
 # Similarity cutoffs, calibrated for voyage-4 (spec's 0.75/0.9 returned nothing).
 # Provisional — recalibrate after ~50 real lessons in M5 (learning run prints the score distribution).
 SIM_RETRIEVE = 0.50   # lesson counts as "relevant" to today

@@ -7,4 +7,4 @@ scipy>=1.13
 yfinance>=0.2.40
 python-dotenv>=1.0
 pytest>=8.0
-# LLM + embedding SDK added once the provider is picked (M3)
+anthropic>=2.8
