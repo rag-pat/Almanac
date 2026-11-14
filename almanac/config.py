@@ -58,7 +58,13 @@ DEMO_MIN_START = "2016-01-01"
 
 # Lesson boxes + the almanac range rule
 BOX = 0.5           # starting half-width of each lesson's range around its fingerprint (and widen margin)
-IN_RANGE_MIN = 6    # almanac: lesson must contain today's value on >= 6 of 8 variables
+IN_RANGE_MIN = 6    # (legacy box rule; boxes now only drive the "unfamiliar conditions" flag)
+
+# Almanac gate: conditional track record. Each lesson keeps an evidence log of (date, z, win).
+# For today: w_i = exp(-d_i^2 / (2 h^2)), A = (1 + sum w_i win_i) / (2 + sum w_i), n_eff = sum w_i
+KERNEL_H = 1.5      # similarity bandwidth in z-units
+A_MIN = 0.55        # show a lesson only if it worked at least this often in markets like today...
+NEFF_MIN = 1.0      # ...based on at least this much similar evidence (below = "unproven here")
 DEMO_MAX_DAYS = 60
 PRESETS = {
     "late 2018": ("2018-10-01", "2018-12-24"),

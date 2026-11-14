@@ -25,7 +25,7 @@ from almanac.agent import decide
 from almanac.broker import Broker, find_due, outcomes, record_decision
 from almanac.data import _to_dt, features_until
 from almanac.features import VARS, describe
-from almanac.lessons import BOX, coll as lessons, make_lesson, notebook_coverage, retrieve
+from almanac.lessons import BOX, coll as lessons, evidence_entry, make_lesson, notebook_coverage, retrieve
 from almanac.llm import cosine, embed, llm_json
 
 AGENT = config.LEARN_AGENT
@@ -88,7 +88,8 @@ def apply_outcome(o: dict, upd: dict, text: str, emb: list[float], merge_into, m
         for lid in o.get("cited", []):
             les = lessons().find_one_and_update(
                 {"_id": lid}, {"$inc": {"wins" if won else "losses": 1},
-                               "$push": {"history": {"event": "cited", "date": sim, "outcome": upd["outcome"]}}},
+                               "$push": {"history": {"event": "cited", "date": sim, "outcome": upd["outcome"]},
+                                         "evidence": evidence_entry(upd["resolved_date"], fp, int(won))}},
                 session=s, return_document=True)
             if les and les["status"] == "active" and should_retire(les["wins"], les["losses"]):
                 p = float(beta.cdf(0.5, 1 + les["wins"], 1 + les["losses"]))
@@ -228,8 +229,8 @@ def preset_coverage():
             for v in r["unfamiliar"]:
                 unf[v] = unf.get(v, 0) + 1
         print(f"  {name:11s} {len(rows)} days  notebook={rows[0]['n_total']}  "
-              f"avg in range (>=6/8): {np.mean([r['n_in_range'] for r in rows]):.1f}  "
-              f"min {min(r['n_in_range'] for r in rows)}  max {max(r['n_in_range'] for r in rows)}  "
+              f"avg lessons that apply (A gate): {np.mean([r['n_applies'] for r in rows]):.1f}  "
+              f"min {min(r['n_applies'] for r in rows)}  max {max(r['n_applies'] for r in rows)}  "
               f"unfamiliar days: {unf or 'none'}")
 
 

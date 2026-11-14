@@ -66,10 +66,15 @@ def test_plain_gets_everything_that_sounds_like_today(today, seeded):
     assert scores == sorted(scores, reverse=True) and min(scores) >= config.ATLAS_SCORE_MIN
 
 
-def test_almanac_keeps_only_6_of_8_in_range(today, seeded):
+def test_almanac_needs_a_proven_record_in_markets_like_today(today, seeded):
+    """Only the birth trade counts as evidence here: a lesson born exactly at today's conditions has
+    n_eff = 1, A = 2/3 (shown); lessons born 2+ z-units away have n_eff < 1 (unproven here, hidden)."""
     r = retrieve(today, BEFORE, agent_id=AGENT)
-    assert set(names(r["almanac"])) == {"crash 8of8", "crash 6of8"}
-    assert {x["text"]: x["in_range"] for x in r["almanac"]} == {"crash 8of8": 8, "crash 6of8": 6}
+    assert names(r["almanac"]) == ["crash 8of8"]
+    x = r["almanac"][0]
+    assert x["A"] == pytest.approx(2 / 3) and x["n_eff"] == pytest.approx(1.0)
+    hidden = {y["text"]: y["n_eff"] for y in r["relevant"] if y["text"] != "crash 8of8"}
+    assert all(n < config.NEFF_MIN for n in hidden.values())
 
 
 def test_retired_future_and_dissimilar_never_returned(today, seeded):
@@ -81,7 +86,8 @@ def test_retired_future_and_dissimilar_never_returned(today, seeded):
 def test_coverage_counts_whole_visible_notebook(today, seeded):
     r = retrieve(today, BEFORE, agent_id=AGENT)
     assert r["n_total"] == 5                  # retired + future excluded
-    assert r["n_in_range"] == 3               # 8of8, 6of8, calm 8of8 (coverage ignores text similarity)
+    assert r["n_applies"] == 2                # crash 8of8 + calm 8of8 (coverage ignores text similarity)
+    assert r["n_unproven"] == 3               # 6of8, 5of8, 0of8: born too far from today
     assert r["unfamiliar"] == []
 
 

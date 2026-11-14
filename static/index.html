@@ -116,7 +116,7 @@ td.best { color: var(--alm); font-weight: 600; }
   <header>
     <div>
       <h1>Almanac</h1>
-      <p class="tagline">Three AI traders share one notebook of lessons they wrote from their own past trades. Almanac only reads lessons learned in market conditions like today's.</p>
+      <p class="tagline">Three AI traders share one notebook of lessons they wrote from their own past trades. Almanac only reads lessons that have worked in markets like today's.</p>
     </div>
     <div class="controls">
       <label>From <input type="date" id="start" min="2016-01-01" max="2024-12-31" value="2020-02-10"></label>
@@ -135,7 +135,7 @@ td.best { color: var(--alm); font-weight: 600; }
     <article class="agent" data-a="plain_ctx"><h2><span class="dot"></span>Plain memory + context</h2>
       <p class="what">Same lessons, plus where each was learned. Judges relevance itself.</p><div class="body"></div></article>
     <article class="agent" data-a="almanac"><h2><span class="dot"></span>Almanac</h2>
-      <p class="what">Only lessons whose learned conditions contain today's (6 of 8 in range).</p><div class="body"></div></article>
+      <p class="what">Only lessons with a good track record in markets like today.</p><div class="body"></div></article>
   </section>
 
   <section class="row">
@@ -184,8 +184,8 @@ function renderStrip(vars = {}, cov = null) {
       <div class="name">${label}</div><div class="z">${z == null ? "–" : (z > 0 ? "+" : "") + z.toFixed(1)}</div>
       <div class="bar"><i style="left:${left}%;width:${w}%"></i></div><div class="flag">No lesson has seen this</div></div>`;
   }).join("") + `<div class="coverage">
-      <div class="big">${cov ? `${cov.in_range} of ${cov.total}` : "–"}</div>
-      <div class="small">lessons in range today${cov ? `, ${cov.relevant} sound relevant` : ""}</div></div>`;
+      <div class="big">${cov ? `${cov.applies} of ${cov.total}` : "–"}</div>
+      <div class="small">lessons proven in markets like today${cov ? `. ${cov.unproven} unproven here.` : ""}</div></div>`;
 }
 
 function renderAgent(a, s) {
@@ -193,7 +193,8 @@ function renderAgent(a, s) {
   if (!s) { el.innerHTML = `<div class="verdict"><span class="act">–</span></div><p class="reason"></p>`; return; }
   const test = l => a === "almanac" && s.day
     ? `<br><button class="cf" data-id="${l.id}" data-date="${s.day}" data-start="${s.start}" data-inv="${s.invested_at_decision}" data-days="${s.days_in_state}">Test: decide again without this lesson</button><div class="cf-out"></div>` : "";
-  const cited = s.cited.length ? s.cited.map(l => `<li><span class="rec">${l.wins}W/${l.losses}L</span>${esc(l.text)}${test(l)}</li>`).join("")
+  const rec = l => a === "almanac" ? `${Math.round(l.A * 100)}% here, ${l.n_eff.toFixed(1)} similar uses` : `${l.wins}W/${l.losses}L`;
+  const cited = s.cited.length ? s.cited.map(l => `<li><span class="rec">${rec(l)}</span> ${esc(l.text)}${test(l)}</li>`).join("")
     : `<li class="empty">${s.n_lessons ? "Cited no lessons today." : "No lessons to read today. Deciding from signals."}</li>`;
   const prev = el.dataset.act;
   el.innerHTML = `<div class="verdict"><span class="act ${prev && prev !== s.action ? "flash" : ""}">${s.action.toUpperCase()}</span>

@@ -105,6 +105,8 @@ def make_lesson(text: str, embedding: list[float], fp: dict, action: str, outcom
         "status": "active",
         "learned_date": learned_date,
         "history": [{"event": "created", "date": learned_date, "outcome": outcome}],
+        # conditional track record: the birth trade is the first entry (its advice was right -> win 1)
+        "evidence": [evidence_entry(learned_date, fp, 1)],
     }
     for v in VARS:
         doc[f"lo_{v}"] = float(fp[v]) - BOX
@@ -112,9 +114,55 @@ def make_lesson(text: str, embedding: list[float], fp: dict, action: str, outcom
     return doc
 
 
+def evidence_entry(date, z: dict, win: int) -> dict:
+    """One evidence-log entry: decision-day z-scores (VARS order), 1/0 result, dated when the result was known."""
+    return {"date": date, "z": [float(z[v]) for v in VARS], "win": int(win)}
+
+
 # ---------- retrieval (the Atlas gate) ----------
 
 IN_RANGE_MIN = config.IN_RANGE_MIN
+
+
+def _applicability_stages(z: dict, before) -> list[dict]:
+    """Aggregation stages adding A (conditional win rate in markets like today) and n_eff (similar evidence).
+    Only evidence dated before `before` (the window start) counts."""
+    today = [float(z[v]) for v in VARS]
+    two_h2 = 2 * config.KERNEL_H ** 2
+    sq_dist = {"$reduce": {"input": {"$range": [0, len(VARS)]}, "initialValue": 0,
+                           "in": {"$add": ["$$value", {"$pow": [{"$subtract": [
+                               {"$arrayElemAt": ["$$e.z", "$$this"]}, {"$arrayElemAt": [today, "$$this"]}]}, 2]}]}}}
+    return [
+        {"$addFields": {"_ev": {"$filter": {"input": {"$ifNull": ["$evidence", []]}, "as": "e",
+                                            "cond": {"$lt": ["$$e.date", _to_date(before)]}}}}},
+        {"$addFields": {"_w": {"$map": {"input": "$_ev", "as": "e", "in": {
+            "w": {"$exp": {"$divide": [{"$multiply": [-1, sq_dist]}, two_h2]}}, "win": "$$e.win"}}}}},
+        {"$addFields": {
+            "n_eff": {"$reduce": {"input": "$_w", "initialValue": 0, "in": {"$add": ["$$value", "$$this.w"]}}},
+            "_wwin": {"$reduce": {"input": "$_w", "initialValue": 0,
+                                  "in": {"$add": ["$$value", {"$multiply": ["$$this.w", "$$this.win"]}]}}}}},
+        {"$addFields": {"A": {"$divide": [{"$add": [1, "$_wwin"]}, {"$add": [2, "$n_eff"]}]},
+                        "n_evidence": {"$size": "$_ev"}}},
+        {"$project": {"_ev": 0, "_w": 0, "_wwin": 0}},
+    ]
+
+
+def applicability_py(evidence: list[dict], z: dict, before) -> tuple[float, float]:
+    """Reference implementation of the pipeline math (tests + reporting)."""
+    import math
+    before, today = _to_date(before), [float(z[v]) for v in VARS]
+    ws = [(math.exp(-sum((a - b) ** 2 for a, b in zip(e["z"], today)) / (2 * config.KERNEL_H ** 2)), e["win"])
+          for e in evidence if e["date"] < before]
+    n_eff = sum(w for w, _ in ws)
+    return (1 + sum(w * win for w, win in ws)) / (2 + n_eff), n_eff
+
+
+def _applies() -> dict:
+    return {"A": {"$gte": config.A_MIN}, "n_eff": {"$gte": config.NEFF_MIN}}
+
+
+def _to_date(d) -> datetime:
+    return d if isinstance(d, datetime) else datetime.fromisoformat(str(d)[:10])
 
 
 def _inside(v: str, zv: float) -> dict:
@@ -127,46 +175,51 @@ def _in_range_count(z: dict) -> dict:
 
 
 def _notebook_filter(before, agent_id: str) -> dict:
-    if not isinstance(before, datetime):
-        before = datetime.fromisoformat(str(before)[:10])
-    return {"status": "active", "learned_date": {"$lt": before}, "agent_id": agent_id}
+    return {"status": "active", "learned_date": {"$lt": _to_date(before)}, "agent_id": agent_id}
 
 
 def search(qvec: list[float], z: dict, before, almanac: bool, agent_id: str = "learner",
            cap: int = config.RETRIEVE_CAP) -> list[dict]:
-    """Relevant lessons for today, best first. almanac=True adds the >= 6-of-8 range rule — all in one pipeline."""
+    """Relevant lessons for today. Plain: best similarity first. almanac=True keeps only lessons with a good
+    conditional record here (A >= A_MIN, n_eff >= NEFF_MIN), ranked by A — all in one pipeline."""
     pipeline = [
         {"$vectorSearch": {"index": INDEX, "path": "embedding", "queryVector": qvec, "exact": True,
                            "limit": 1000, "filter": _notebook_filter(before, agent_id)}},
         {"$addFields": {"score": {"$meta": "vectorSearchScore"}}},
         {"$match": {"score": {"$gte": config.ATLAS_SCORE_MIN}}},
+        *_applicability_stages(z, before),
         {"$addFields": {"in_range": _in_range_count(z)}},
     ]
     if almanac:
-        pipeline.append({"$match": {"in_range": {"$gte": IN_RANGE_MIN}}})
-    pipeline += [{"$sort": {"score": -1}}, {"$limit": cap}, {"$project": {"embedding": 0}}]
+        pipeline += [{"$match": _applies()}, {"$sort": {"A": -1, "score": -1}}]
+    else:
+        pipeline += [{"$sort": {"score": -1}}]
+    pipeline += [{"$limit": cap}, {"$project": {"embedding": 0, "evidence": 0}}]
     return list(coll().aggregate(pipeline))
 
 
 def notebook_coverage(z: dict, before, agent_id: str = "learner") -> dict:
-    """Over the WHOLE visible notebook: total lessons, how many are in range (>= 6 of 8),
-    and which variables are outside every lesson's range ("unfamiliar conditions")."""
+    """Over the WHOLE visible notebook: how many lessons apply here (A gate), how many are unproven here
+    (n_eff < NEFF_MIN), and which variables are outside every lesson's box ("unfamiliar conditions")."""
     group = {"_id": None, "total": {"$sum": 1},
-             "in_range": {"$sum": {"$cond": [{"$gte": [_in_range_count(z), IN_RANGE_MIN]}, 1, 0]}}}
+             "applies": {"$sum": {"$cond": [{"$and": [{"$gte": ["$A", config.A_MIN]},
+                                                       {"$gte": ["$n_eff", config.NEFF_MIN]}]}, 1, 0]}},
+             "unproven": {"$sum": {"$cond": [{"$lt": ["$n_eff", config.NEFF_MIN]}, 1, 0]}}}
     group.update({f"cov_{v}": {"$sum": _inside(v, float(z[v]))} for v in VARS})
-    res = next(coll().aggregate([{"$match": _notebook_filter(before, agent_id)}, {"$group": group}]), None)
+    res = next(coll().aggregate([{"$match": _notebook_filter(before, agent_id)},
+                                 *_applicability_stages(z, before), {"$group": group}]), None)
     if not res:
-        return {"n_total": 0, "n_in_range": 0, "unfamiliar": list(VARS)}
-    return {"n_total": res["total"], "n_in_range": res["in_range"],
+        return {"n_total": 0, "n_applies": 0, "n_unproven": 0, "unfamiliar": list(VARS)}
+    return {"n_total": res["total"], "n_applies": res["applies"], "n_unproven": res["unproven"],
             "unfamiliar": [v for v in VARS if res[f"cov_{v}"] == 0]}
 
 
-def in_range_lessons(z: dict, before, agent_id: str = "learner") -> dict:
-    """{lesson_id: text} for every visible lesson in range on >= IN_RANGE_MIN variables (ignores text similarity)."""
+def applicable_lessons(z: dict, before, agent_id: str = "learner") -> dict:
+    """{lesson_id: text} for every visible lesson that applies today (A gate; ignores text similarity)."""
     rows = coll().aggregate([
         {"$match": _notebook_filter(before, agent_id)},
-        {"$addFields": {"in_range": _in_range_count(z)}},
-        {"$match": {"in_range": {"$gte": IN_RANGE_MIN}}},
+        *_applicability_stages(z, before),
+        {"$match": _applies()},
         {"$project": {"text": 1}},
     ])
     return {str(r["_id"]): r["text"] for r in rows}
@@ -186,7 +239,7 @@ def retrieve(z: dict, before, agent_id: str = "learner") -> dict:
     return {
         "description": text,
         "relevant": search(qvec, z, before, almanac=False, agent_id=agent_id),  # plain + plain_ctx
-        "almanac": search(qvec, z, before, almanac=True, agent_id=agent_id),    # almanac (>= 6 of 8 in range)
+        "almanac": search(qvec, z, before, almanac=True, agent_id=agent_id),    # almanac (conditional record)
         **notebook_coverage(z, before, agent_id),
     }
 

@@ -21,7 +21,7 @@ SYSTEM = (
     "You decide at today's close; the trade fills at the next day's open; each trade costs 0.05%. "
     "You have two signals: RSI(2), where low values mean a sharp short-term dip that often bounces, "
     "and the 200-day average, where price below it means a downtrend. "
-    "Past lessons are notes from your own earlier trades, each with its win/loss record. "
+    "Past lessons are notes from your own earlier trades, each with its track record. "
     "Use a lesson only if it applies to today. Trust lessons with better records more. "
     "If no lesson applies, decide from the signals alone. Cite only lesson IDs shown. "
     f"Keep the reason under {REASON_MAX_WORDS} words."
@@ -63,7 +63,10 @@ def build_prompt(date, position: dict, lessons: list[dict], mode: str, feat: dic
     for i, les in enumerate(lessons, 1):
         sid = f"L{i}"
         id_map[sid] = str(les["_id"])
-        line = f"[{sid}] ({les['wins']}W/{les['losses']}L) {les['text']}"
+        if mode == "almanac" and "A" in les:  # conditional record: how it did in markets like today
+            line = f"[{sid}] worked {les['A']:.0%} in markets like today ({les['n_eff']:.1f} similar uses) {les['text']}"
+        else:
+            line = f"[{sid}] ({les['wins']}W/{les['losses']}L) {les['text']}"
         if mode == "plain_ctx":
             line += f"\n     learned at: {_z_line(les['fp'])}"
         lines.append(line)

@@ -18,7 +18,7 @@ from almanac.agent import decide
 from almanac.broker import Broker
 from almanac.data import _to_dt, features_until
 from almanac.features import VARS
-from almanac.lessons import coll as lessons_coll, in_range_lessons, retrieve
+from almanac.lessons import applicable_lessons, coll as lessons_coll, retrieve
 from almanac.metrics import summarize
 
 AGENTS = ("plain", "plain_ctx", "almanac")
@@ -59,17 +59,17 @@ class RangeWatcher(threading.Thread):
                     continue
                 doc = ch["fullDocument"]
                 z = {v: doc[f"z_{v}"] for v in VARS}
-                now = in_range_lessons(z, self.before, NOTEBOOK)
+                now = applicable_lessons(z, self.before, NOTEBOOK)
                 events = []
                 if prev is None:
-                    events.append({"kind": "baseline", "text": f"{len(now)} lessons in range at the start"})
+                    events.append({"kind": "baseline", "text": f"{len(now)} lessons have a good record in markets like this"})
                 else:
                     entered, left = set(now) - set(prev), set(prev) - set(now)
                     if entered:
-                        events.append({"kind": "entered", "text": f"{len(entered)} lesson(s) entered range",
+                        events.append({"kind": "entered", "text": f"{len(entered)} lesson(s) now apply",
                                        "lessons": [now[i] for i in list(entered)[:3]]})
                     if left:
-                        events.append({"kind": "left", "text": f"{len(left)} lesson(s) left range",
+                        events.append({"kind": "left", "text": f"{len(left)} lesson(s) stopped applying",
                                        "lessons": [prev[i] for i in list(left)[:3]]})
                 prev = now
                 self.out.put((doc["date"], events))
@@ -77,7 +77,8 @@ class RangeWatcher(threading.Thread):
 
 def _lesson_view(les: dict) -> dict:
     return {"id": str(les["_id"]), "text": les["text"], "wins": les["wins"], "losses": les["losses"],
-            "score": round(2 * les.get("score", 0.5) - 1, 3), "in_range": les.get("in_range")}
+            "score": round(2 * les.get("score", 0.5) - 1, 3), "in_range": les.get("in_range"),
+            "A": round(les.get("A", 0.5), 3), "n_eff": round(les.get("n_eff", 0.0), 2)}
 
 
 def run_demo(start, end):
@@ -138,7 +139,7 @@ def run_demo(start, end):
                    "variables": {v: round(z[v], 2) for v in VARS},
                    "signals": {"rsi2": round(float(feat["rsi2"]), 1), "above200": bool(feat["above200"])},
                    "description": r["description"],
-                   "coverage": {"in_range": r["n_in_range"], "total": notebook_total,
+                   "coverage": {"applies": r["n_applies"], "unproven": r["n_unproven"], "total": notebook_total,
                                 "relevant": len(r["relevant"]), "unfamiliar": r["unfamiliar"]},
                    "agents": agents_out, "events": events}
 
