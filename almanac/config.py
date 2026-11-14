@@ -13,6 +13,18 @@ CACHE_DIR = ROOT / ".cache"
 MONGODB_URI = os.getenv("MONGODB_URI", "")
 MONGODB_DB = os.getenv("MONGODB_DB", "almanac")
 
+# Embeddings: Voyage via Atlas AI Model APIs (the ONE swap point is llm.embed)
+VOYAGE_API_KEY = os.getenv("VOYAGE_API_KEY", "")
+EMBED_URL = "https://ai.mongodb.com/v1/embeddings"
+EMBED_MODEL = "voyage-4"
+EMBED_DIM = 1024
+
+# Similarity cutoffs, calibrated for voyage-4 (spec's 0.75/0.9 returned nothing).
+# Provisional — recalibrate after ~50 real lessons in M5 (learning run prints the score distribution).
+SIM_RETRIEVE = 0.50   # lesson counts as "relevant" to today
+SIM_MERGE = 0.85      # rediscovery: also requires same action AND same outcome
+RETRIEVE_CAP = 30     # max lessons per prompt, highest score first
+
 # Data
 SYMBOLS = ["SPY", "^VIX", "^TNX", "^IRX", "LQD", "IEF"]
 DATA_START = "2005-01-01"

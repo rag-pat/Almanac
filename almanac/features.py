@@ -66,6 +66,32 @@ def annotate(frames: dict[str, pd.DataFrame], zstats=None) -> pd.DataFrame:
     return out.dropna(subset=VARS)
 
 
+# Words for each variable by z bucket: [<-2, -2..-1, -1..1, 1..2, >2]
+WORDS = {
+    "vol":      ["Volatility very low", "Volatility low", "Volatility normal", "Volatility high", "Volatility very high"],
+    "trend":    ["Price far below its long-term trend", "Price below its long-term trend", "Price near its long-term trend",
+                 "Price above its long-term trend", "Price far above its long-term trend"],
+    "drawdown": ["Very deep drawdown from highs", "Deep drawdown from highs", "Moderate drawdown from highs",
+                 "Near recent highs", "At recent highs"],
+    "volume":   ["Trading volume very low", "Trading volume low", "Trading volume normal",
+                 "Trading volume high", "Trading volume very high"],
+    "vix":      ["Fear very low", "Fear low", "Fear normal", "Fear high", "Fear very high"],
+    "rates":    ["Yields falling very fast", "Yields falling", "Yields stable", "Yields rising", "Yields rising very fast"],
+    "curve":    ["Yield curve inverted", "Yield curve flat", "Yield curve normal", "Yield curve steep", "Yield curve very steep"],
+    "credit":   ["Credit stress severe", "Credit stress elevated", "Credit calm", "Credit strong", "Credit very strong"],
+}
+
+
+def bucket(z: float) -> int:
+    return 0 if z < -2 else 1 if z < -1 else 2 if z <= 1 else 3 if z <= 2 else 4
+
+
+def describe(z: dict) -> str:
+    """Deterministic plain-English description of a day from its z-scores (keys: VARS or z_VARS)."""
+    get = lambda v: z[f"z_{v}"] if f"z_{v}" in z else z[v]  # prefer z_ keys: feature docs also hold raw values
+    return ". ".join(WORDS[v][bucket(get(v))] for v in VARS) + "."
+
+
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else "show"
     frames = load_all()
