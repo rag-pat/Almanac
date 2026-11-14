@@ -166,8 +166,9 @@ def stream_demo(start, end, seed: int | None = None):
             r["events"].append({"kind": "unfamiliar", "text": "unfamiliar conditions: " + ", ".join(unf)})
         prev_unf = unf
         r.pop("applies", None)
-        for ag in r["agents"].values():
-            ag.pop("shown", None)
+        for name, ag in r["agents"].items():
+            if name != "almanac":  # keep almanac's shown ids so the UI can mark lessons hidden from it
+                ag.pop("shown", None)
 
     yield {"type": "start", "n_days": len(recs), "prep_seconds": round(time.time() - t0, 1),
            "from_stream": len(watcher.events)}

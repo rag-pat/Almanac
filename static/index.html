@@ -74,6 +74,7 @@ input[type=date] { background: var(--panel); border: 1px solid var(--line); bord
 .cf:disabled { cursor: progress; }
 .cf-out { font-size: 12px; margin-top: 5px; color: var(--text); }
 .cf-out b { color: var(--alm); }
+.hid { display: inline-block; margin-top: 3px; font-size: 11px; color: var(--alm); border: 1px solid rgba(233,180,76,.4); border-radius: 3px; padding: 0 5px; }
 .agent[data-a=none] { --c: var(--none); } .agent[data-a=plain] { --c: var(--plain); } .agent[data-a=plain_ctx] { --c: var(--ctx); } .agent[data-a=almanac] { --c: var(--alm); }
 
 /* charts + events */
@@ -221,10 +222,12 @@ function renderAgent(a, s) {
   if (!s) { el.innerHTML = `<div class="verdict"><span class="act">–</span></div><p class="reason"></p>`; return; }
   const test = l => a === "almanac" && s.day
     ? `<br><button class="cf" data-id="${l.id}" data-date="${s.day}">Test: decide again without this lesson</button><div class="cf-out"></div>` : "";
+  const hidden = l => (a === "plain" || a === "plain_ctx") && s.almanacShown && !s.almanacShown.includes(l.id)
+    ? ` <span class="hid">hidden from Almanac: not proven here</span>` : "";
   const rec = l => a !== "almanac" ? `${l.wins}W/${l.losses}L`
     : l.cls === 2 ? `unproven here, ${l.wins}W/${l.losses}L overall`
     : `${l.cls === 0 ? "proven" : "mixed"} here: ${Math.round(l.A * 100)}%, ${l.n_eff.toFixed(1)} similar uses`;
-  const cited = s.cited.length ? s.cited.map(l => `<li><span class="rec">${rec(l)}</span> ${esc(l.text)}${test(l)}</li>`).join("")
+  const cited = s.cited.length ? s.cited.map(l => `<li><span class="rec">${rec(l)}</span> ${esc(l.text)}${hidden(l)}${test(l)}</li>`).join("")
     : `<li class="empty">${a === "none" ? "Has no memory. Decides from the chart and signals." : s.n_lessons ? "Cited no lessons today." : "No lessons to read today. Deciding from signals."}</li>`;
   const prev = el.dataset.act;
   const label = { buy: "BUY", sell: "SELL", stay_in: "STAY IN", stay_out: "STAY OUT" }[s.action] || "–";
@@ -299,9 +302,23 @@ async function renderSweep(msg) {
 
 // ---------- run ----------
 let source = null;
+let dayRecs = [];
+function showDay(d, note) {
+  AGENTS.forEach(a => { d.agents[a].day = d.date; d.agents[a].almanacShown = d.agents.almanac.shown || []; renderAgent(a, d.agents[a]); });
+  renderStrip(d.variables, d.coverage);
+  if (note) $("#status").textContent = note;
+}
+// click the price chart to inspect that day's decisions (and run the counterfactual on it)
+candleChart.subscribeClick(param => {
+  if (!param.time || !dayRecs.length) return;
+  const t = typeof param.time === "string" ? param.time
+    : `${param.time.year}-${String(param.time.month).padStart(2, "0")}-${String(param.time.day).padStart(2, "0")}`;
+  const d = dayRecs.find(x => x.date === t);
+  if (d) showDay(d, `Showing ${d.date}: ${d.description}  (click the price chart to inspect another day)`);
+});
 function reset() {
   candles.setData([]); bench.setData([]); AGENTS.forEach(a => { eqLines[a].setData([]); eqData[a] = []; }); benchData = [];
-  $("#events").innerHTML = ""; $("#endcard").classList.remove("show");
+  $("#events").innerHTML = ""; $("#endcard").classList.remove("show"); dayRecs = [];
   AGENTS.forEach(a => { delete $(`.agent[data-a=${a}] .body`).dataset.act; renderAgent(a, null); });
   renderStrip();
 }
@@ -325,6 +342,7 @@ function run() {
     const chunk = JSON.parse(ev.data).days;
     for (const d of chunk) {
       n++;
+      dayRecs.push(d);
       firstClose ??= d.ohlc.close;
       candles.update({ time: d.date, ...d.ohlc });
       benchData.push({ time: d.date, value: d.ohlc.close / firstClose });
@@ -340,7 +358,7 @@ function run() {
       addEvents(d.date, d.events);
     }
     const d = chunk[chunk.length - 1];
-    AGENTS.forEach(a => { d.agents[a].day = d.date; renderAgent(a, d.agents[a]); });
+    showDay(d);
     candles.setMarkers(markers);
     candleChart.timeScale().fitContent(); eqChart.timeScale().fitContent();
     renderStrip(d.variables, d.coverage);
@@ -349,7 +367,7 @@ function run() {
   source.addEventListener("end", ev => {
     const msg = JSON.parse(ev.data);
     renderEnd(msg); source.close(); $("#run").disabled = false;
-    $("#status").textContent = `Done. ${msg.days} trading days.`;
+    $("#status").textContent = `Done. ${msg.days} trading days. Click any day on the price chart to inspect it.`;
   });
   source.addEventListener("error", ev => {
     let text = "The stream stopped. Check that the server is running, then press Run again.";
