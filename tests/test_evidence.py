@@ -42,24 +42,32 @@ def seeded(today):
         d = make_lesson(name, emb, today, "sell", "win", "2010-06-01", agent_id=AGENT)
         d["evidence"] += past + future
         docs.append(d)
+    strong = make_lesson("strong here", emb, today, "sell", "win", "2010-06-01", agent_id=AGENT)
+    strong["evidence"] += [evidence_entry(datetime(2012, 1, 2 + i), shift(today, 0.1), 1) for i in range(8)]
+    coin = make_lesson("coin flip here", emb, today, "sell", "win", "2010-06-01", agent_id=AGENT)
+    coin["evidence"] += [evidence_entry(datetime(2012, 2, 1 + i), today, i % 2) for i in range(20)]
+    docs += [strong, coin]
     coll().insert_many(docs)
     t0 = time.time()
-    while time.time() - t0 < 60 and len(retrieve(today, WINDOW, agent_id=AGENT)["relevant"]) < 3:
+    while time.time() - t0 < 60 and len(retrieve(today, WINDOW, agent_id=AGENT)["relevant"]) < 5:
         time.sleep(1)
-    yield {d["text"]: d for d in docs}
+    yield {d["text"]: d for d in docs if d["text"] not in ("strong here", "coin flip here")} | \
+        {"_strong": strong, "_coin": coin}
     coll().delete_many({"agent_id": AGENT})
 
 
 def test_pipeline_matches_reference_math(today, seeded):
     r = {x["text"]: x for x in retrieve(today, WINDOW, agent_id=AGENT)["relevant"]}
     for name, doc in seeded.items():
+        if name.startswith("_"):
+            continue
         a, n = applicability_py(doc["evidence"], today, WINDOW)
         assert r[name]["A"] == pytest.approx(a, rel=1e-9) and r[name]["n_eff"] == pytest.approx(n, rel=1e-9)
 
 
 def test_evidence_after_window_start_never_affects_A(today, seeded):
     r = {x["text"]: x for x in retrieve(today, WINDOW, agent_id=AGENT)["relevant"]}
-    a = {k: r[k]["A"] for k in seeded}
+    a = {k: r[k]["A"] for k in seeded if not k.startswith("_")}
     assert a["future losses"] == pytest.approx(a["no future"]) == pytest.approx(a["future wins"])
     assert r["future losses"]["n_evidence"] == r["no future"]["n_evidence"] == 4   # birth + 3 past
     # sanity: once the window starts after those entries, they DO count
@@ -95,3 +103,17 @@ def test_lessons_proven_to_fail_here_are_hidden(today, seeded):
     assert "fails here" in [x["text"] for x in r["relevant"]]
     assert "fails here" not in [x["text"] for x in r["almanac"]]
     assert r["n_failing"] >= 1
+
+
+def test_confidence_gate_shows_strong_hides_coin_flip(today, seeded):
+    from almanac.lessons import applicability_py, confidence_py
+    r = retrieve(today, WINDOW, agent_id=AGENT)
+    shown = [x["text"] for x in r["almanac"]]
+    assert "strong here" in shown and "coin flip here" not in shown
+    by = {x["text"]: x for x in r["relevant"]}
+    for name in ("strong here", "coin flip here"):
+        doc = seeded["_strong" if name == "strong here" else "_coin"]
+        a, n = applicability_py(doc["evidence"], today, WINDOW)
+        lo, hi = confidence_py(a, n)
+        assert by[name]["lcb"] == pytest.approx(lo, rel=1e-9) and by[name]["ucb"] == pytest.approx(hi, rel=1e-9)
+    assert by["strong here"]["lcb"] > 0.5 > by["coin flip here"]["lcb"]

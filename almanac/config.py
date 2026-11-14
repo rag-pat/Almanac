@@ -65,7 +65,13 @@ IN_RANGE_MIN = 6    # (legacy box rule; boxes now only drive the "unfamiliar con
 KERNEL_H = 1.5      # similarity bandwidth in z-units
 A_MIN = 0.55        # show a lesson only if it worked at least this often in markets like today...
 NEFF_MIN = 1.0      # ...based on at least this much similar evidence (below = "unproven here")
-A_FAIL = 0.45       # hide only lessons proven to fail here: A < A_FAIL with n_eff >= NEFF_MIN
+A_FAIL = 0.45       # (legacy point thresholds; the gate now uses the confidence bounds below)
+# "Proven here" = confident the lesson beats chance in markets like today: with the kernel-weighted posterior
+# theta ~ Beta(1 + sum w*win, 1 + sum w*(1-win)) (mean = A), require P(theta > 0.5) > PROVEN_CONF.
+# Computed in the Atlas pipeline with a normal approximation: lcb = A - z * sqrt(A(1-A) / (n_eff + 3)) > 0.5.
+# "Proven to fail here" is the mirror image: ucb = A + z * sd < 0.5.
+PROVEN_CONF = 0.90
+PROVEN_Z = 1.2815515655446004  # standard normal quantile for PROVEN_CONF
 GATE_SMOOTH_DAYS = 5   # the gate scores lessons against the 5-day average of the 8 z-scores
 CONFIRM_DAYS = 2       # simulator changes position only when the same target appears 2 days in a row
 DEMO_MAX_DAYS = 60            # sweep window length; /run itself has no cap

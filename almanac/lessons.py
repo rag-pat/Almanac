@@ -154,8 +154,20 @@ def _applicability_stages(z: dict, before) -> list[dict]:
                                   "in": {"$add": ["$$value", {"$multiply": ["$$this.w", "$$this.win"]}]}}}}},
         {"$addFields": {"A": {"$divide": [{"$add": [1, "$_wwin"]}, {"$add": [2, "$n_eff"]}]},
                         "n_evidence": {"$size": "$_ev"}}},
-        {"$project": {"_ev": 0, "_w": 0, "_wwin": 0}},
+        # confidence band on the win rate (normal approximation to the Beta posterior)
+        {"$addFields": {"_sd": {"$sqrt": {"$divide": [{"$multiply": ["$A", {"$subtract": [1, "$A"]}]},
+                                                      {"$add": ["$n_eff", 3]}]}}}},
+        {"$addFields": {"lcb": {"$subtract": ["$A", {"$multiply": [config.PROVEN_Z, "$_sd"]}]},
+                        "ucb": {"$add": ["$A", {"$multiply": [config.PROVEN_Z, "$_sd"]}]}}},
+        {"$project": {"_ev": 0, "_w": 0, "_wwin": 0, "_sd": 0}},
     ]
+
+
+def confidence_py(a: float, n_eff: float) -> tuple[float, float]:
+    """(lcb, ucb) of the win rate, same formula as the pipeline."""
+    import math
+    sd = math.sqrt(a * (1 - a) / (n_eff + 3))
+    return a - config.PROVEN_Z * sd, a + config.PROVEN_Z * sd
 
 
 def applicability_py(evidence: list[dict], z: dict, before) -> tuple[float, float]:
@@ -169,7 +181,8 @@ def applicability_py(evidence: list[dict], z: dict, before) -> tuple[float, floa
 
 
 def _applies() -> dict:
-    return {"A": {"$gte": config.A_MIN}, "n_eff": {"$gte": config.NEFF_MIN}}
+    """Proven here: confident (PROVEN_CONF) the lesson beats chance in markets like today."""
+    return {"lcb": {"$gt": 0.5}, "n_eff": {"$gte": config.NEFF_MIN}}
 
 
 def _to_date(d) -> datetime:
@@ -190,19 +203,20 @@ def _notebook_filter(before, agent_id: str) -> dict:
 
 
 def _class_expr() -> dict:
-    """0 = proven here (A >= A_MIN), 1 = mixed here, 2 = unproven here (n_eff < NEFF_MIN), 3 = proven to fail here."""
+    """0 = proven here (lcb > 0.5), 1 = mixed / not confident, 2 = unproven here (n_eff < NEFF_MIN),
+    3 = proven to fail here (ucb < 0.5)."""
     proven_n = {"$gte": ["$n_eff", config.NEFF_MIN]}
     return {"$switch": {"branches": [
         {"case": {"$not": [proven_n]}, "then": 2},
-        {"case": {"$gte": ["$A", config.A_MIN]}, "then": 0},
-        {"case": {"$lt": ["$A", config.A_FAIL]}, "then": 3},
+        {"case": {"$gt": ["$lcb", 0.5]}, "then": 0},
+        {"case": {"$lt": ["$ucb", 0.5]}, "then": 3},
     ], "default": 1}}
 
 
 def search(qvec: list[float], z: dict, before, almanac: bool, agent_id: str = "learner",
            cap: int = config.RETRIEVE_CAP) -> list[dict]:
     """Relevant lessons for today, in one pipeline. Plain: best similarity first.
-    almanac=True: only lessons proven here (A >= A_MIN and n_eff >= NEFF_MIN), ranked by A. Mixed, unproven
+    almanac=True: only lessons proven here (confident they beat chance: lcb > 0.5), ranked by A. Mixed, unproven
     and proven-to-fail lessons are left out. z = the gate's (smoothed) z-scores."""
     pipeline = [
         {"$vectorSearch": {"index": INDEX, "path": "embedding", "queryVector": qvec, "exact": True,

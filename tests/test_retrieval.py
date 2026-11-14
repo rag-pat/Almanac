@@ -66,14 +66,16 @@ def test_plain_gets_everything_that_sounds_like_today(today, seeded):
     assert scores == sorted(scores, reverse=True) and min(scores) >= config.ATLAS_SCORE_MIN
 
 
-def test_almanac_sees_only_lessons_proven_here(today, seeded):
-    """Only birth trades are evidence here. The lesson born at today's conditions is proven here
-    (n_eff = 1, A = 2/3); lessons born 2+ z-units away are unproven here (n_eff < 1) and left out."""
+def test_almanac_needs_confident_evidence(today, seeded):
+    """Only birth trades are evidence here. One birth exactly at today's conditions gives A = 2/3 on n_eff = 1:
+    not enough to be confident it beats chance, so it is 'mixed' (cls 1) and Almanac sees nothing.
+    Lessons born 2+ z-units away are unproven here (cls 2)."""
     r = retrieve(today, BEFORE, agent_id=AGENT)
-    assert names(r["almanac"]) == ["crash 8of8"]
-    x = r["almanac"][0]
-    assert x["cls"] == 0 and x["A"] == pytest.approx(2 / 3) and x["n_eff"] == pytest.approx(1.0)
-    assert all(y["cls"] == 2 for y in r["relevant"] if y["text"] != "crash 8of8")
+    assert r["almanac"] == []
+    by = {y["text"]: y for y in r["relevant"]}
+    assert by["crash 8of8"]["cls"] == 1 and by["crash 8of8"]["A"] == pytest.approx(2 / 3)
+    assert by["crash 8of8"]["lcb"] < 0.5
+    assert all(y["cls"] == 2 for t, y in by.items() if t != "crash 8of8")
 
 
 def test_retired_future_and_dissimilar_never_returned(today, seeded):
@@ -85,7 +87,7 @@ def test_retired_future_and_dissimilar_never_returned(today, seeded):
 def test_coverage_counts_whole_visible_notebook(today, seeded):
     r = retrieve(today, BEFORE, agent_id=AGENT)
     assert r["n_total"] == 5                  # retired + future excluded
-    assert r["n_applies"] == 2                # crash 8of8 + calm 8of8 (coverage ignores text similarity)
+    assert r["n_applies"] == 0                # one birth trade is never confident evidence
     assert r["n_unproven"] == 3               # 6of8, 5of8, 0of8: born too far from today
     assert r["n_failing"] == 0
     assert r["unfamiliar"] == []

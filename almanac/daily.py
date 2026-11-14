@@ -44,7 +44,8 @@ def notebook_version() -> str:
     agg = next(db.db()["lessons"].aggregate([{"$match": q}, {"$group": {
         "_id": None, "n": {"$sum": 1}, "ev": {"$sum": {"$size": {"$ifNull": ["$evidence", []]}}},
         "last": {"$max": "$learned_date"}, "w": {"$sum": "$wins"}, "l": {"$sum": "$losses"}}}]), None)
-    return "empty" if not agg else f"{agg['n']}-{agg['ev']}-{agg['w']}-{agg['l']}-{agg['last']:%Y%m%d}"
+    gate = f"g{config.PROVEN_CONF}-{config.KERNEL_H}-{config.NEFF_MIN}-{config.GATE_SMOOTH_DAYS}"  # gate rule
+    return "empty" if not agg else f"{agg['n']}-{agg['ev']}-{agg['w']}-{agg['l']}-{agg['last']:%Y%m%d}-{gate}"
 
 
 def trading_days(start, end) -> list:
