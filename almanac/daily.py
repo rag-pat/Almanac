@@ -37,6 +37,16 @@ def coll():
     return c
 
 
+def notebook_version() -> str:
+    """Identifies the frozen notebook (lessons + evidence before the cutoff). Stored decisions made with an
+    older notebook (e.g. while the learning run was still going) are treated as missing and recomputed."""
+    q = {"agent_id": NOTEBOOK, "learned_date": {"$lt": CUTOFF}}
+    agg = next(db.db()["lessons"].aggregate([{"$match": q}, {"$group": {
+        "_id": None, "n": {"$sum": 1}, "ev": {"$sum": {"$size": {"$ifNull": ["$evidence", []]}}},
+        "last": {"$max": "$learned_date"}, "w": {"$sum": "$wins"}, "l": {"$sum": "$losses"}}}]), None)
+    return "empty" if not agg else f"{agg['n']}-{agg['ev']}-{agg['w']}-{agg['l']}-{agg['last']:%Y%m%d}"
+
+
 def trading_days(start, end) -> list:
     return list(features_until(end).loc[str(start)[:10]:str(end)[:10]].index)
 
@@ -99,7 +109,7 @@ def _decide_with_retry(d, agent, c, seed, tries: int = 6) -> dict:
             last = e  # noqa: F841
 
 
-async def _decide_all(jobs, seed, concurrency, label):
+async def _decide_all(jobs, seed, concurrency, label, nb):
     sem = asyncio.Semaphore(concurrency)
     done, t0, out = 0, time.time(), []
 
@@ -119,8 +129,8 @@ async def _decide_all(jobs, seed, concurrency, label):
     for chunk_start in range(0, len(jobs), 400):  # write as we go so progress survives interruptions
         chunk = jobs[chunk_start:chunk_start + 400]
         docs = await asyncio.gather(*(run(*j) for j in chunk))
-        coll().bulk_write([UpdateOne({"agent": x["agent"], "date": x["date"], "seed": seed}, {"$set": x}, upsert=True)
-                           for x in docs], ordered=False)
+        coll().bulk_write([UpdateOne({"agent": x["agent"], "date": x["date"], "seed": seed},
+                                     {"$set": {**x, "nb": nb}}, upsert=True) for x in docs], ordered=False)
         out += docs
     return out
 
@@ -130,8 +140,10 @@ def compute(dates: list, seed: int | None = None, concurrency: int = config.PREC
     """Compute and store whatever is missing for these dates. Returns number of decisions computed."""
     if not dates:
         return 0
+    nb = notebook_version()
     have = {(x["agent"], x["date"]) for x in coll().find(
-        {"date": {"$gte": _to_dt(min(dates)), "$lte": _to_dt(max(dates))}, "seed": seed}, {"agent": 1, "date": 1})}
+        {"date": {"$gte": _to_dt(min(dates)), "$lte": _to_dt(max(dates))}, "seed": seed, "nb": nb},
+        {"agent": 1, "date": 1})}
     need_days = [d for d in dates if any((a, d.to_pydatetime()) not in have for a in AGENTS + ("_market",))]
     if not need_days:
         return 0
@@ -141,11 +153,11 @@ def compute(dates: list, seed: int | None = None, concurrency: int = config.PREC
         t0 = time.time()
         ctxs = day_contexts(days)
         coll().bulk_write([UpdateOne({"agent": "_market", "date": d.to_pydatetime(), "seed": seed},
-                                     {"$set": _market_doc(d, ctxs[d], seed)}, upsert=True) for d in days])
+                                     {"$set": {**_market_doc(d, ctxs[d], seed), "nb": nb}}, upsert=True) for d in days])
         jobs = [(d, a, ctxs[d]) for d in days for a in AGENTS if (a, d.to_pydatetime()) not in have]
         print(f"{label}: days {days[0]:%Y-%m-%d}..{days[-1]:%Y-%m-%d} contexts in {time.time() - t0:.0f}s, "
               f"{len(jobs)} decisions", flush=True)
-        asyncio.run(_decide_all(jobs, seed, concurrency, label))
+        asyncio.run(_decide_all(jobs, seed, concurrency, label, nb))
         total += len(jobs)
     return total
 
@@ -154,7 +166,7 @@ def load(start, end, seed: int | None = None) -> tuple[list, dict, dict]:
     """(trading days, market docs by date, decisions by (agent, date)) — computing anything missing first."""
     days = trading_days(start, end)
     compute(days, seed, label="on-the-fly")
-    q = {"date": {"$gte": _to_dt(days[0]), "$lte": _to_dt(days[-1])}, "seed": seed}
+    q = {"date": {"$gte": _to_dt(days[0]), "$lte": _to_dt(days[-1])}, "seed": seed, "nb": notebook_version()}
     market, dec = {}, {}
     for x in coll().find(q, {"_id": 0}):
         if x["agent"] == "_market":
