@@ -79,10 +79,11 @@ def _schema(short_ids: list[str]) -> dict:
             "required": ["action", "cited", "reason"], "additionalProperties": False}
 
 
-def decide(date, position: dict, lessons: list[dict], mode: str, feat: dict | None = None) -> dict:
+def decide(date, position: dict, lessons: list[dict], mode: str, feat: dict | None = None,
+           fresh: bool = False) -> dict:
     user, id_map = build_prompt(date, position, lessons, mode, feat)
     try:
-        out = llm_json(SYSTEM, user, _schema(list(id_map)))
+        out = llm_json(SYSTEM, user, _schema(list(id_map)), use_cache=not fresh)
     except (LLMRefusal, ValueError, KeyError, StopIteration) as e:  # bad/blocked output -> do nothing
         out = {"action": "hold", "cited": [], "reason": f"fallback: {type(e).__name__}"}
 

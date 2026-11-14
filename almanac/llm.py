@@ -87,8 +87,9 @@ class LLMRefusal(RuntimeError):
     pass
 
 
-def llm_json(system: str, user: str, schema: dict, effort: str | None = None) -> dict:
-    """One Claude call that must return JSON matching `schema`. Cached on disk by full input.
+def llm_json(system: str, user: str, schema: dict, effort: str | None = None, use_cache: bool = True) -> dict:
+    """One Claude call that must return JSON matching `schema`. Cached on disk by full input
+    (use_cache=False forces a fresh call — the counterfactual uses this to measure real variation).
 
     Note: current Claude models reject non-default `temperature`, so determinism comes from the
     cache — the same prompt always returns the same stored answer on reruns.
@@ -109,7 +110,7 @@ def llm_json(system: str, user: str, schema: dict, effort: str | None = None) ->
         text = next(b.text for b in resp.content if b.type == "text")
         return json.loads(text)
 
-    return cached("llm", payload, call)
+    return cached("llm", payload, call) if use_cache else call()
 
 
 def cosine(a, b) -> float:

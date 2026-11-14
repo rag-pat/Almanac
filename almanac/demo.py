@@ -115,10 +115,12 @@ def run_demo(start, end):
             agents_out = {}
             for a in AGENTS:
                 d = decisions[a]
+                pos_at_decision = brokers[a].position
                 brokers[a].order(d["action"])
                 by_id = {str(x["_id"]): x for x in seen[a]}
                 agents_out[a] = {"action": d["action"], "intent": d["raw_action"], "reason": d["reason"],
                                  "invested": brokers[a].invested, "equity": bar_eq(brokers[a]),
+                                 "days_in_state": pos_at_decision["days"],
                                  "n_lessons": len(seen[a]),
                                  "cited": [_lesson_view(by_id[c]) for c in d["cited"] if c in by_id]}
 
@@ -131,7 +133,7 @@ def run_demo(start, end):
                 events.append({"kind": "unfamiliar", "text": "unfamiliar conditions: " + ", ".join(r["unfamiliar"])})
             prev_unfamiliar = r["unfamiliar"]
 
-            yield {"type": "day", "run_id": run_id, "date": f"{day:%Y-%m-%d}",
+            yield {"type": "day", "run_id": run_id, "date": f"{day:%Y-%m-%d}", "window_start": f"{days[0]:%Y-%m-%d}",
                    "ohlc": {k: bar[k] for k in ("open", "high", "low", "close")},
                    "variables": {v: round(z[v], 2) for v in VARS},
                    "signals": {"rsi2": round(float(feat["rsi2"]), 1), "above200": bool(feat["above200"])},

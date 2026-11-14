@@ -69,6 +69,11 @@ input[type=date] { background: var(--panel); border: 1px solid var(--line); bord
 .cited li { font-size: 13px; padding: 6px 8px; border-left: 2px solid var(--c); background: rgba(255,255,255,.03); border-radius: 0 4px 4px 0; }
 .cited .rec { color: var(--muted); font-size: 12px; margin-right: 4px; }
 .cited .empty { color: var(--muted); border-left-color: var(--line); background: none; }
+.cf { margin-top: 5px; background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 2px 8px; font-size: 12px; color: var(--muted); cursor: pointer; }
+.cf:hover { color: var(--text); border-color: var(--muted); }
+.cf:disabled { cursor: progress; }
+.cf-out { font-size: 12px; margin-top: 5px; color: var(--text); }
+.cf-out b { color: var(--alm); }
 .agent[data-a=plain] { --c: var(--plain); } .agent[data-a=plain_ctx] { --c: var(--ctx); } .agent[data-a=almanac] { --c: var(--alm); }
 
 /* charts + events */
@@ -186,7 +191,9 @@ function renderStrip(vars = {}, cov = null) {
 function renderAgent(a, s) {
   const el = $(`.agent[data-a=${a}] .body`);
   if (!s) { el.innerHTML = `<div class="verdict"><span class="act">–</span></div><p class="reason"></p>`; return; }
-  const cited = s.cited.length ? s.cited.map(l => `<li><span class="rec">${l.wins}W/${l.losses}L</span>${esc(l.text)}</li>`).join("")
+  const test = l => a === "almanac" && s.day
+    ? `<br><button class="cf" data-id="${l.id}" data-date="${s.day}" data-start="${s.start}" data-inv="${s.invested_at_decision}" data-days="${s.days_in_state}">Test: decide again without this lesson</button><div class="cf-out"></div>` : "";
+  const cited = s.cited.length ? s.cited.map(l => `<li><span class="rec">${l.wins}W/${l.losses}L</span>${esc(l.text)}${test(l)}</li>`).join("")
     : `<li class="empty">${s.n_lessons ? "Cited no lessons today." : "No lessons to read today. Deciding from signals."}</li>`;
   const prev = el.dataset.act;
   el.innerHTML = `<div class="verdict"><span class="act ${prev && prev !== s.action ? "flash" : ""}">${s.action.toUpperCase()}</span>
@@ -253,6 +260,8 @@ function run() {
     bench.update({ time: d.date, value: d.ohlc.close / firstClose });
     AGENTS.forEach((a, i) => {
       const s = d.agents[a];
+      // position the agent held when it decided (an order placed today only fills tomorrow)
+      s.day = d.date; s.start = d.window_start; s.invested_at_decision = s.invested;
       eqLines[a].update({ time: d.date, value: s.equity });
       // orders are placed at today's close; mark the decision day
       if (s.action === "buy") markers.push({ time: d.date, position: "belowBar", color: COLORS[a], shape: "arrowUp", text: "" });
@@ -277,6 +286,22 @@ function run() {
   });
 }
 $("#run").addEventListener("click", run);
+
+// counterfactual: rerun the almanac decision without one cited lesson (5 fresh runs each way)
+document.addEventListener("click", async ev => {
+  const b = ev.target.closest(".cf"); if (!b) return;
+  const out = b.nextElementSibling;
+  b.disabled = true; out.textContent = "Asking the agent 10 more times, about 10 seconds…";
+  const q = new URLSearchParams({ date: b.dataset.date, start: b.dataset.start, lesson_id: b.dataset.id,
+                                  invested: b.dataset.inv, days: b.dataset.days });
+  try {
+    const r = await fetch(`/counterfactual?${q}`);
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || r.statusText);
+    out.innerHTML = `<b>${Math.round(j.flip_rate * 100)}% flip rate.</b> ${esc(j.summary)}`;
+  } catch (e) { out.textContent = "Test failed: " + e.message; }
+  b.disabled = false;
+});
 
 fetch("/presets").then(r => r.json()).then(p => {
   $("#presets").innerHTML = Object.entries(p).map(([name, [s, e]]) =>

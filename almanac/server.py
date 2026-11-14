@@ -40,3 +40,13 @@ def run(start: str = Query(...), end: str = Query(...)):
 
     return StreamingResponse(stream(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.get("/counterfactual")
+def counterfactual_endpoint(date: str, start: str, lesson_id: str, invested: bool = False, days: int = 0):
+    """Rerun one demo day's almanac decision with a cited lesson removed (5 fresh runs) -> flip rate."""
+    from almanac.counterfactual import counterfactual
+    try:
+        return counterfactual(date, start, lesson_id, invested, days)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
