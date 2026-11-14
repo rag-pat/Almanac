@@ -25,7 +25,7 @@ CALM_WON = lesson("In a calm market near recent highs with fear low, staying inv
 
 
 @pytest.mark.parametrize("day", DAYS)
-@pytest.mark.parametrize("mode", ["plain", "plain_ctx", "almanac"])
+@pytest.mark.parametrize("mode", ["plain", "plain_ctx", "almanac", "none"])
 def test_prompt_never_leaks_date_ticker_or_price(day, mode):
     user, _ = build_prompt(day, {"in": False, "days": 3}, [CRASH_LOST, CALM_WON], mode)
     text = SYSTEM + "\n" + user
@@ -71,3 +71,10 @@ def test_live_decision_is_valid(mode):
         assert d["raw_action"] in ("buy", "sell", "hold")
         assert set(d["cited"]) <= {str(CRASH_LOST["_id"]), str(CALM_WON["_id"])}
         assert 0 < len(d["reason"].split()) <= 25
+
+
+def test_none_mode_has_no_lessons_even_if_given_some():
+    user, ids = build_prompt("2020-03-16", {"in": False, "days": 0}, [CRASH_LOST, CALM_WON], "none")
+    assert "No past lessons available." in user and "[L1]" not in user and ids == {}
+    plain, _ = build_prompt("2020-03-16", {"in": False, "days": 0}, [CRASH_LOST], "plain")
+    assert user.split("No past lessons")[0] == plain.split("Past lessons")[0]   # identical market section

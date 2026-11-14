@@ -2,7 +2,7 @@
 
 **An AI trading agent whose memory knows when it applies.**
 
-Almanac is an LLM trading agent that writes lessons from its own trades. Each lesson stores the market conditions it was learned in, plus a valid range for each condition. MongoDB Atlas only lets the agent retrieve lessons whose ranges contain today's conditions. Ranges widen when a lesson is rediscovered in new conditions, and lessons are retired when Bayesian evidence says they lose. We compare it live against two agents with plain memory.
+Almanac is an LLM trading agent that writes lessons from its own trades. Each lesson keeps an evidence log of the market conditions it was tested in and whether it worked. MongoDB Atlas computes, inside the retrieval pipeline, how well each lesson has worked **in markets like today's**, and only shows the agent lessons with a good conditional track record. Lessons merge when rediscovered and are retired when Bayesian evidence says they lose. We compare it live against an agent with no memory and two agents with plain memory.
 
 Built for the MongoDB **Agents in Context** hackathon, Track 2: **Memory You Can Govern**.
 
@@ -12,7 +12,7 @@ Built for the MongoDB **Agents in Context** hackathon, Track 2: **Memory You Can
 
 Agent memory is usually "store notes, retrieve the ones that sound similar." For a trading agent, that fails in a predictable way. A lesson like *"buying the dip after a sharp drop paid off"* sounds just as relevant in a calm 2017 pullback as in the March 2020 crash, but it was learned in one of those and is dangerous in the other.
 
-Almanac makes memory **governed**. The database, not the LLM, decides which lessons the agent is allowed to see, based on whether today looks like the conditions each lesson was learned in.
+Almanac makes memory **governed**. The database, not the LLM, decides which lessons the agent is allowed to see, based on how each lesson has actually performed in conditions like today's.
 
 ## How it works
 
@@ -24,10 +24,11 @@ Almanac makes memory **governed**. The database, not the LLM, decides which less
    ──► broker fills at next open (5 bps) ──► 5 trading days later: score win / loss
    ──► Claude writes a one-sentence lesson ──► merge (widen box) or insert ──► retire losers
                                                                        │  frozen notebook
- DEMO (any window from 2016, daily)                                    ▼
-   plain       all lessons that sound relevant
+ DEMO (any window from 2016, daily, 4 agents in parallel)              ▼
+   none        same prompt and signals, no lessons at all
+   plain       all lessons that sound relevant, with overall W/L
    plain_ctx   same lessons + where each was learned; judges relevance itself
-   almanac     only lessons whose learned ranges contain today's conditions (6 of 8)
+   almanac     only lessons that worked in markets like today (conditional record)
    ──► live in the browser over SSE, with memory events from a change stream
 ```
 
@@ -35,17 +36,24 @@ Almanac makes memory **governed**. The database, not the LLM, decides which less
 
 **A lesson** is one sentence the agent wrote about its own trade, plus:
 - `fp`: the 8 z-scores on the decision day (its fingerprint)
-- `lo_<var>` / `hi_<var>`: a valid range per variable, starting at fp ± 0.5
+- `evidence`: `[{date, z, win}]`. The birth trade, plus every resolved decision that cited the lesson, dated when the result was known.
+- `lo_<var>` / `hi_<var>`: a box per variable, starting at fp ± 0.5 and widening on rediscovery. Boxes now only drive the "unfamiliar conditions" flag.
 - `wins` / `losses`: the record of its advice. New lessons start at 1W/0L, a rediscovery adds a win, and being cited in a winning or losing decision adds a win or loss.
 - `status` (active or retired), `learned_date`, `history` of every change
 
 **The Atlas gate** is one aggregation pipeline:
 1. `$vectorSearch` (exact) on the embedding of today's description, filtered to active lessons learned before the window
 2. keep lessons with cosine ≥ 0.50, best first, at most 30. **This is what the plain agents get.**
-3. `$addFields` counts how many of the 8 variables fall inside the lesson's `[lo, hi]` range
-4. **Almanac only:** `$match` count ≥ 6
+3. `$filter` the evidence log to entries dated **before the window start**, then compute with `$map` / `$reduce`:
+   - `d_i` = Euclidean distance between today's 8 z-scores and entry *i*
+   - `w_i = exp(-d_i² / 2h²)` with h = 1.5
+   - **A** = (1 + Σ wᵢ·winᵢ) / (2 + Σ wᵢ), the smoothed win rate in markets like today
+   - **n_eff** = Σ wᵢ, how much similar evidence there is
+4. **Almanac only:** keep A ≥ 0.55 and n_eff ≥ 1, ranked by A, at most 30. A lesson with n_eff < 1 is "unproven here".
 
-A second aggregation reports **unfamiliar conditions**: variables where today's value is outside every lesson's range.
+The Almanac prompt shows each lesson as *"[L1] worked 84% in markets like today (4.3 similar uses)"*. The plain agents see the overall W/L. A second aggregation reports **unfamiliar conditions**: variables where today's value is outside every lesson's box.
+
+Evidence is backfilled from the learning run in one aggregation (`$lookup` lessons → outcomes, then `$merge` back into `lessons`), and kept up to date with `$push` inside the same transaction that scores each trade.
 
 **Learning rules.**
 - **Rediscovery:** a new lesson with cosine ≥ 0.85 to an active lesson **with the same action and outcome** is merged. The old lesson's box widens to cover the new fingerprint ± 0.5.
@@ -58,7 +66,8 @@ A second aggregation reports **unfamiliar conditions**: variables where today's 
 | Feature | Where |
 |---|---|
 | **Atlas Vector Search** (exact ENN) with 19 filter fields | the retrieval gate (`lessons.py`) |
-| **Aggregation pipeline** | range counting, the ≥ 6-of-8 rule and unfamiliar-condition detection, all server-side |
+| **Aggregation pipeline** (`$filter`, `$map`, `$reduce`, `$exp`) | the conditional track record (A, n_eff) computed per lesson after `$vectorSearch`, plus unfamiliar-condition detection |
+| **`$lookup` + `$merge`** | evidence backfill from outcomes into lessons (`evidence.py`) |
 | **`$jsonSchema` validation** | the `lessons` collection rejects any lesson missing a field or with bad values |
 | **Multi-document transactions** | each resolved trade updates the outcome, cited lessons, merges or inserts and retirements atomically (`learn.py`) |
 | **Change streams** | `market_state` inserts are turned into "lessons entered / left range" events for the UI (`demo.py`) |
@@ -73,7 +82,7 @@ Collections: `bars`, `features`, `lessons`, `outcomes`, `memory_events`, `market
 - Z-score constants come from 2007-2012 only, and a test checks the constants match.
 - Features on day *t* are identical whether computed on all data or data cut at *t* (tested on 5 dates).
 - Fingerprints come from the decision day. Trades fill at the next day's open.
-- Demo agents only see lessons with `learned_date` before the window starts (the notebook ends in 2015, and demos start in 2016).
+- Demo agents only see lessons with `learned_date` before the window starts (the notebook ends in 2015, and demos start in 2016). Only evidence dated before the window start counts toward A, and a test checks that later evidence never changes it.
 - The LLM never sees real dates, the ticker or real prices. It sees "Asset X, day 13826" with prices rebased to 100. A test scans prompts for years, months, "SPY" and real prices.
 
 ## Proof: counterfactual
@@ -95,6 +104,8 @@ python -m almanac.data download     # 1. prices for SPY, VIX, TNX, IRX, LQD, IEF
 python -m almanac.data load         # 2. bars + features -> Atlas
 python -m almanac.lessons setup     # 3. lessons collection, validator, vector index
 python -m almanac.learn             # 4. learning run 2007-2015 (builds the notebook)
+python -m almanac.evidence backfill # 4b. evidence logs for the conditional track record
+python -m almanac.evidence report   #     how the gate behaves on each preset
 python -m almanac.warm              # 5. optional: run the presets once so the demo replays from cache
 uvicorn almanac.server:app --port 8000   # 6. open http://localhost:8000
 python -m pytest tests/             # tests
@@ -111,9 +122,9 @@ Python 3.11, pymongo, FastAPI, pandas, numpy, scipy, yfinance. **Claude Haiku 5.
 Everything in this repo was built during the hackathon on 2026-11-14:
 
 - Data pipeline: 20 years of daily data for 6 symbols, 8 condition variables, z-scoring frozen to 2007-2012, and no-lookahead tests. Credit and rates were redesigned mid-build after we found they drifted out of range for years.
-- The lessons notebook in Atlas: schema validation, a vector index with 19 filter fields, and the single-pipeline retrieval gate with the 6-of-8 range rule and unfamiliar-condition detection.
+- The lessons notebook in Atlas: schema validation, a vector index with 19 filter fields, and the single-pipeline retrieval gate. It started as a 6-of-8 range box and was upgraded mid-day to a conditional track record (kernel-weighted win rate in markets like today) computed inside the aggregation.
 - Similarity cutoffs calibrated for Voyage. This is also where we found Atlas reports cosine as (1 + cos) / 2.
 - A Claude trading agent with a disguised prompt, three memory modes and safety checks (made-up lesson IDs dropped, bad output becomes hold).
 - Broker and outcome scoring. The learning run writes, merges, widens and retires lessons in transactions with a full event log.
-- The 3-agent demo engine with a change stream on `market_state`, SSE streaming, the front end, metrics and the counterfactual flip-rate test.
-- 86 tests.
+- The 4-agent demo engine (no memory, plain, plain + context, Almanac) with a change stream on `market_state`, SSE streaming, the front end, metrics and the counterfactual flip-rate test.
+- 94 tests.

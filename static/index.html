@@ -12,7 +12,7 @@
 :root {
   --bg: #141c2e; --panel: #1c2740; --panel-2: #222f4c; --line: #2d3b5c;
   --text: #ece6d6; --muted: #8d97ab;
-  --plain: #94a0b8; --ctx: #b897c9; --alm: #e9b44c;
+  --none: #6fa8a0; --plain: #94a0b8; --ctx: #b897c9; --alm: #e9b44c;
   --up: #5fae8c; --down: #cf6a5f;
   --serif: "Fraunces", Georgia, serif; --sans: "Instrument Sans", system-ui, sans-serif;
 }
@@ -51,7 +51,7 @@ input[type=date] { background: var(--panel); border: 1px solid var(--line); bord
 .coverage .small { font-size: 12px; color: var(--muted); }
 
 /* agents: the star */
-.agents { display: grid; grid-template-columns: 1fr 1fr 1.25fr; gap: 12px; margin-bottom: 16px; }
+.agents { display: grid; grid-template-columns: 1fr 1fr 1fr 1.2fr; gap: 12px; margin-bottom: 16px; }
 .agent { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; display: flex; flex-direction: column; min-height: 300px; }
 .agent[data-a=almanac] { border-color: var(--alm); background: linear-gradient(var(--panel-2), var(--panel)); }
 .agent h2 { font: 600 16px/1.2 var(--sans); margin: 0; display: flex; align-items: center; gap: 8px; }
@@ -74,7 +74,7 @@ input[type=date] { background: var(--panel); border: 1px solid var(--line); bord
 .cf:disabled { cursor: progress; }
 .cf-out { font-size: 12px; margin-top: 5px; color: var(--text); }
 .cf-out b { color: var(--alm); }
-.agent[data-a=plain] { --c: var(--plain); } .agent[data-a=plain_ctx] { --c: var(--ctx); } .agent[data-a=almanac] { --c: var(--alm); }
+.agent[data-a=none] { --c: var(--none); } .agent[data-a=plain] { --c: var(--plain); } .agent[data-a=plain_ctx] { --c: var(--ctx); } .agent[data-a=almanac] { --c: var(--alm); }
 
 /* charts + events */
 .row { display: grid; grid-template-columns: minmax(0, 2.2fr) minmax(260px, 1fr); gap: 12px; margin-bottom: 12px; }
@@ -105,9 +105,11 @@ td.best { color: var(--alm); font-weight: 600; }
 @media (max-width: 1000px) {
   .strip { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .coverage { grid-column: 1 / -1; }
-  .agents, .row { grid-template-columns: 1fr; }
+  .row { grid-template-columns: 1fr; }
+  .agents { grid-template-columns: 1fr 1fr; }
   .agent { min-height: 0; }
 }
+@media (max-width: 640px) { .agents { grid-template-columns: 1fr; } }
 @media (prefers-reduced-motion: reduce) { .verdict .act.flash { animation: none; } }
 </style>
 </head>
@@ -116,7 +118,7 @@ td.best { color: var(--alm); font-weight: 600; }
   <header>
     <div>
       <h1>Almanac</h1>
-      <p class="tagline">Three AI traders share one notebook of lessons they wrote from their own past trades. Almanac only reads lessons that have worked in markets like today's.</p>
+      <p class="tagline">Four AI traders get the same prompt and signals. Three share a notebook of lessons written from their own past trades, and one has no memory. Almanac only reads lessons that have worked in markets like today's.</p>
     </div>
     <div class="controls">
       <label>From <input type="date" id="start" min="2016-01-01" max="2024-12-31" value="2020-02-10"></label>
@@ -130,6 +132,8 @@ td.best { color: var(--alm); font-weight: 600; }
   <section class="strip" id="strip" aria-label="Today's market conditions"></section>
 
   <section class="agents" aria-label="Agents">
+    <article class="agent" data-a="none"><h2><span class="dot"></span>No memory</h2>
+      <p class="what">Same prompt and signals, no lessons at all.</p><div class="body"></div></article>
     <article class="agent" data-a="plain"><h2><span class="dot"></span>Plain memory</h2>
       <p class="what">Reads every lesson that sounds relevant.</p><div class="body"></div></article>
     <article class="agent" data-a="plain_ctx"><h2><span class="dot"></span>Plain memory + context</h2>
@@ -140,21 +144,21 @@ td.best { color: var(--alm); font-weight: 600; }
 
   <section class="row">
     <div class="card"><h3>Price, with each agent's trades</h3>
-      <div class="legend"><span style="--c:var(--plain)">Plain</span><span style="--c:var(--ctx)">Plain + context</span><span style="--c:var(--alm)">Almanac</span></div>
+      <div class="legend"><span style="--c:var(--none)">No memory</span><span style="--c:var(--plain)">Plain</span><span style="--c:var(--ctx)">Plain + context</span><span style="--c:var(--alm)">Almanac</span></div>
       <div id="candles"></div></div>
     <div class="card"><h3>Memory events</h3><ul id="events"></ul></div>
   </section>
   <section class="card"><h3>Equity (starts at 1.00)</h3>
-    <div class="legend"><span style="--c:var(--plain)">Plain</span><span style="--c:var(--ctx)">Plain + context</span><span style="--c:var(--alm)">Almanac</span><span style="--c:#55617a">Buy and hold</span></div>
+    <div class="legend"><span style="--c:var(--none)">No memory</span><span style="--c:var(--plain)">Plain</span><span style="--c:var(--ctx)">Plain + context</span><span style="--c:var(--alm)">Almanac</span><span style="--c:#55617a">Buy and hold</span></div>
     <div id="equity"></div></section>
 
   <section class="card" id="endcard" aria-live="polite"></section>
 </main>
 
 <script>
-const AGENTS = ["plain", "plain_ctx", "almanac"];
-const NAMES = { plain: "Plain memory", plain_ctx: "Plain + context", almanac: "Almanac", benchmark: "Buy and hold" };
-const COLORS = { plain: "#94a0b8", plain_ctx: "#b897c9", almanac: "#e9b44c" };
+const AGENTS = ["none", "plain", "plain_ctx", "almanac"];
+const NAMES = { none: "No memory", plain: "Plain memory", plain_ctx: "Plain + context", almanac: "Almanac", benchmark: "Buy and hold" };
+const COLORS = { none: "#6fa8a0", plain: "#94a0b8", plain_ctx: "#b897c9", almanac: "#e9b44c" };
 const VARS = [["vol","Volatility"],["trend","Trend"],["drawdown","Drawdown"],["volume","Volume"],
               ["vix","Fear (VIX)"],["rates","Yield change"],["curve","Yield curve"],["credit","Credit"]];
 const $ = (s, el = document) => el.querySelector(s);
@@ -195,7 +199,7 @@ function renderAgent(a, s) {
     ? `<br><button class="cf" data-id="${l.id}" data-date="${s.day}" data-start="${s.start}" data-inv="${s.invested_at_decision}" data-days="${s.days_in_state}">Test: decide again without this lesson</button><div class="cf-out"></div>` : "";
   const rec = l => a === "almanac" ? `${Math.round(l.A * 100)}% here, ${l.n_eff.toFixed(1)} similar uses` : `${l.wins}W/${l.losses}L`;
   const cited = s.cited.length ? s.cited.map(l => `<li><span class="rec">${rec(l)}</span> ${esc(l.text)}${test(l)}</li>`).join("")
-    : `<li class="empty">${s.n_lessons ? "Cited no lessons today." : "No lessons to read today. Deciding from signals."}</li>`;
+    : `<li class="empty">${a === "none" ? "Has no memory. Decides from the chart and signals." : s.n_lessons ? "Cited no lessons today." : "No lessons to read today. Deciding from signals."}</li>`;
   const prev = el.dataset.act;
   el.innerHTML = `<div class="verdict"><span class="act ${prev && prev !== s.action ? "flash" : ""}">${s.action.toUpperCase()}</span>
       <span class="eq">${s.equity.toFixed(3)}</span><span class="pos">${s.invested ? "Invested" : "In cash"}</span></div>
@@ -225,7 +229,7 @@ function renderEnd(msg) {
   const m = { ...msg.metrics, benchmark: msg.benchmark };
   const winner = AGENTS.reduce((b, a) => (m[a].total_return > m[b].total_return ? a : b));
   $("#endcard").innerHTML = `<h2>${NAMES[winner]} finished ahead over ${msg.days} trading days</h2>
-    <p>Same notebook, same model, same prompt and same costs. Only the memory rule differs.</p>
+    <p>Same model, prompt, signals and costs. Only the memory differs: none, plain, plain with context, or Almanac.</p>
     <table><thead><tr><th></th>${cols.map(c => `<th>${NAMES[c]}</th>`).join("")}</tr></thead><tbody>${
       rows.map(([label, k, fmt, rank]) => {
         const vals = AGENTS.map(a => m[a][k]);
@@ -251,7 +255,7 @@ function run() {
   reset();
   $("#run").disabled = true;
   $("#status").textContent = "Starting. The first day takes up to 30 seconds while the agents warm up.";
-  const markers = [], prevInv = { plain: false, plain_ctx: false, almanac: false };
+  const markers = [];
   let n = 0, firstClose = null;
   source = new EventSource(`/run?start=${start}&end=${end}`);
   source.addEventListener("day", ev => {

@@ -1,5 +1,6 @@
-"""M6: demo engine — 3 agents trade the same window daily on the frozen notebook (read only).
+"""M6: demo engine — 4 agents trade the same window daily on the frozen notebook (read only), in parallel.
 
+  none       same prompt and signals, no lessons at all (memory-free baseline)
   plain      all relevant lessons (text)
   plain_ctx  all relevant lessons + fingerprints, judges relevance itself
   almanac    relevant lessons that are in range (>= IN_RANGE_MIN of 8)
@@ -21,7 +22,7 @@ from almanac.features import VARS
 from almanac.lessons import applicable_lessons, coll as lessons_coll, retrieve
 from almanac.metrics import summarize
 
-AGENTS = ("plain", "plain_ctx", "almanac")
+AGENTS = ("none", "plain", "plain_ctx", "almanac")
 NOTEBOOK = config.LEARN_AGENT
 
 
@@ -109,7 +110,7 @@ def run_demo(start, end):
                                        **{f"z_{v}": z[v] for v in VARS},
                                        "rsi2": float(feat["rsi2"]), "above200": bool(feat["above200"])})
             r = retrieve(z, before, agent_id=NOTEBOOK)
-            seen = {"plain": r["relevant"], "plain_ctx": r["relevant"], "almanac": r["almanac"]}
+            seen = {"none": [], "plain": r["relevant"], "plain_ctx": r["relevant"], "almanac": r["almanac"]}
             futures = {a: pool.submit(decide, day, brokers[a].position, seen[a], a, feat) for a in AGENTS}
             decisions = {a: f.result() for a, f in futures.items()}
 

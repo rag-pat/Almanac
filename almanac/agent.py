@@ -8,7 +8,7 @@ from almanac.data import bars_until, features_until
 from almanac.features import VARS, describe
 from almanac.llm import LLMRefusal, llm_json
 
-MODES = ("plain", "plain_ctx", "almanac")
+MODES = ("plain", "plain_ctx", "almanac", "none")  # none = same prompt and signals, no memory at all
 DAY_OFFSET = 10_000  # "day 13412" — never looks like a year
 REASON_MAX_WORDS = 25
 
@@ -59,7 +59,11 @@ def build_prompt(date, position: dict, lessons: list[dict], mode: str, feat: dic
         lines += ["", CTX_NOTE, f"Today's numbers: {_z_line(z)}"]
 
     id_map = {}
-    lines += ["", "Past lessons:" if lessons else "Past lessons: none apply."]
+    if mode == "none":
+        lessons = []
+        lines += ["", "No past lessons available."]
+    else:
+        lines += ["", "Past lessons:" if lessons else "Past lessons: none apply."]
     for i, les in enumerate(lessons, 1):
         sid = f"L{i}"
         id_map[sid] = str(les["_id"])
