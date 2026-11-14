@@ -81,6 +81,11 @@ input[type=date] { background: var(--panel); border: 1px solid var(--line); bord
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
 .card h3 { font: 600 14px/1.2 var(--sans); margin: 0 0 8px; color: var(--muted); }
 #candles { height: 340px; } #equity { height: 220px; }
+.eqhead { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 8px; }
+.eqhead h3 { margin: 0; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.segb { background: transparent; border: 0; padding: 4px 10px; font-size: 12px; color: var(--muted); cursor: pointer; }
+.segb.on { background: var(--panel-2); color: var(--text); }
 .legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
 .legend span::before { content: ""; display: inline-block; width: 12px; height: 3px; margin-right: 6px; vertical-align: middle; background: var(--c); }
 #events { list-style: none; margin: 0; padding: 0; height: 340px; overflow-y: auto; display: grid; align-content: start; gap: 8px; }
@@ -148,7 +153,9 @@ td.best { color: var(--alm); font-weight: 600; }
       <div id="candles"></div></div>
     <div class="card"><h3>Memory events</h3><ul id="events"></ul></div>
   </section>
-  <section class="card"><h3>Equity (starts at 1.00)</h3>
+  <section class="card"><div class="eqhead"><h3 id="eqtitle">Equity (starts at 1.00)</h3>
+    <div class="seg" role="group" aria-label="Equity view">
+      <button class="segb on" data-mode="abs">Equity</button><button class="segb" data-mode="rel">Vs buy and hold</button></div></div>
     <div class="legend"><span style="--c:var(--none)">No memory</span><span style="--c:var(--plain)">Plain</span><span style="--c:var(--ctx)">Plain + context</span><span style="--c:var(--alm)">Almanac</span><span style="--c:#55617a">Buy and hold</span></div>
     <div id="equity"></div></section>
 
@@ -174,6 +181,23 @@ const candles = candleChart.addCandlestickSeries({ upColor: "#5fae8c", downColor
 const eqChart = LightweightCharts.createChart($("#equity"), base);
 const eqLines = Object.fromEntries(AGENTS.map(a => [a, eqChart.addLineSeries({ color: COLORS[a], lineWidth: a === "almanac" ? 3 : 2, priceLineVisible: false })]));
 const bench = eqChart.addLineSeries({ color: "#55617a", lineWidth: 1, lineStyle: 2, priceLineVisible: false });
+// equity view: absolute (starts at 1.00) or relative to buy and hold (agent equity / buy-and-hold - 1)
+let eqMode = "abs";
+const eqData = Object.fromEntries(AGENTS.map(a => [a, []]));
+let benchData = [];
+const eqPoint = (a, i) => eqMode === "abs" ? eqData[a][i]
+  : { time: eqData[a][i].time, value: (eqData[a][i].value / benchData[i].value - 1) * 100 };
+function redrawEquity() {
+  AGENTS.forEach(a => eqLines[a].setData(eqData[a].map((_, i) => eqPoint(a, i))));
+  bench.setData(eqMode === "abs" ? benchData : benchData.map(p => ({ time: p.time, value: 0 })));
+  $("#eqtitle").textContent = eqMode === "abs" ? "Equity (starts at 1.00)" : "Return vs buy and hold (percentage points)";
+  eqChart.timeScale().fitContent();
+}
+document.querySelectorAll(".segb").forEach(b => b.addEventListener("click", () => {
+  eqMode = b.dataset.mode;
+  document.querySelectorAll(".segb").forEach(x => x.classList.toggle("on", x === b));
+  redrawEquity();
+}));
 new ResizeObserver(() => { candleChart.applyOptions({ width: $("#candles").clientWidth });
   eqChart.applyOptions({ width: $("#equity").clientWidth }); }).observe(document.body);
 
@@ -276,7 +300,7 @@ async function renderSweep(msg) {
 // ---------- run ----------
 let source = null;
 function reset() {
-  candles.setData([]); bench.setData([]); AGENTS.forEach(a => eqLines[a].setData([]));
+  candles.setData([]); bench.setData([]); AGENTS.forEach(a => { eqLines[a].setData([]); eqData[a] = []; }); benchData = [];
   $("#events").innerHTML = ""; $("#endcard").classList.remove("show");
   AGENTS.forEach(a => { delete $(`.agent[data-a=${a}] .body`).dataset.act; renderAgent(a, null); });
   renderStrip();
@@ -303,10 +327,12 @@ function run() {
       n++;
       firstClose ??= d.ohlc.close;
       candles.update({ time: d.date, ...d.ohlc });
-      bench.update({ time: d.date, value: d.ohlc.close / firstClose });
+      benchData.push({ time: d.date, value: d.ohlc.close / firstClose });
+      bench.update(eqMode === "abs" ? benchData.at(-1) : { time: d.date, value: 0 });
       AGENTS.forEach(a => {
         const s = d.agents[a];
-        eqLines[a].update({ time: d.date, value: s.equity });
+        eqData[a].push({ time: d.date, value: s.equity });
+        eqLines[a].update(eqPoint(a, eqData[a].length - 1));
         // decided at today's close, fills at tomorrow's open; mark the decision day
         if (s.action === "buy") markers.push({ time: d.date, position: "belowBar", color: COLORS[a], shape: "arrowUp", text: "" });
         if (s.action === "sell") markers.push({ time: d.date, position: "aboveBar", color: COLORS[a], shape: "arrowDown", text: "" });
