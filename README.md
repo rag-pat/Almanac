@@ -51,7 +51,7 @@ Almanac makes memory **governed**. The database, not the LLM, decides which less
    - `w_i = exp(-d_i² / 2h²)` with h = 1.5
    - **A** = (1 + Σ wᵢ·winᵢ) / (2 + Σ wᵢ), the smoothed win rate in markets like today
    - **n_eff** = Σ wᵢ, how much similar evidence there is
-4. Each lesson is classed as **proven here** (A ≥ 0.55, n_eff ≥ 1), **mixed**, **unproven here** (n_eff < 1) or **proven to fail here** (A < 0.45, n_eff ≥ 1).
+4. A confidence band on that win rate, from a normal approximation to the kernel-weighted Beta posterior: `lcb, ucb = A ∓ 1.28·√(A(1−A)/(n_eff+3))`. Each lesson is classed as **proven here** (90% confident it beats a coin flip: lcb > 0.5, n_eff ≥ 1), **mixed**, **unproven here** (n_eff < 1) or **proven to fail here** (ucb < 0.5). With lots of similar evidence a lesson needs to be right about 62% of the time to count as proven; with little, about 72%.
 5. **Almanac only:** keep lessons proven here, ranked by A, at most 30. On days with none, Almanac decides from the signals alone, like the no-memory agent.
 
 The Almanac prompt shows each lesson as *"[L1] proven here: worked 84% in markets like today (4.3 similar uses)"*. The plain agents see the overall W/L. A second aggregation counts the classes over the whole notebook and reports **unfamiliar conditions**: variables where today's value is outside every lesson's box.
@@ -106,20 +106,23 @@ Collections: `bars`, `features`, `lessons`, `outcomes`, `memory_events`, `market
 | No memory | −2.06% | −8.13% | −0.11 | 7 of 12 |
 | Plain memory | −3.19% | −10.07% | −0.23 | – |
 | Plain + context | −2.84% | −9.48% | −0.19 | 4 of 12 |
-| **Almanac** | **−0.29%** | **−7.12%** | **0.04** | 6 of 12 |
+| Almanac | −2.30% | −8.40% | −0.05 | 6 of 12 |
 | Buy and hold | −1.84% | −10.47% | 0.18 | 10 of 12 |
 
 **The three presets:**
 
 | Window | No memory | Plain | Plain + context | Almanac | Buy and hold |
 |---|---|---|---|---|---|
-| Late 2018 | −12.7% | −19.6% | −16.8% | **−12.2%** | −19.2% |
-| 2020 crash | −14.3% | −19.0% | −22.4% | **+2.4%** | −15.0% |
-| 2022 bear | −14.2% | −17.3% | −14.6% | **−12.3%** | −11.9% |
+| Late 2018 | **−12.7%** | −19.6% | −16.8% | −22.7% | −19.2% |
+| 2020 crash | **−14.3%** | −19.0% | −22.4% | −17.7% | −15.0% |
+| 2022 bear | −14.2% | −17.3% | −14.6% | **−4.6%** | −11.9% |
+| Feb 2019 - Feb 2020 (calm) | +5.8% | +16.5% | +19.1% | **+19.7%** | +21.1% |
 
-**What this shows.** Almanac's edge is in stressed markets: it had the best return of the four agents in all three presets, and in the 2020 crash it stayed in cash 81% of the time while the plain agents kept buying the dip on lessons that only *sounded* relevant. In calm uptrends every agent is long most days, so all of them track buy and hold and the differences are small. Over the long 2016-2017 bull run, buy and hold (+38.6%) beat every agent (Almanac +35.4%, plain +35.9%). These numbers come from one sample per prompt; reruns with seeded samples on the presets give a sense of the spread (see `python -m almanac.sweep summary`).
+Seeded reruns (3 extra samples per agent) on the presets: in the 2022 bear Almanac averages −7.5% ± 0.5 against −14% to −18% for the other agents.
 
-**How we got here.** Two QA passes found the agents were following the 200-day average because the prompt told them what it meant, and that Almanac's gate had too little evidence to work (median 1 entry per lesson). We removed the signal interpretation from the prompt, rebuilt the evidence log to include rediscoveries and score each lesson's own recommendation, and restricted Almanac to lessons proven here. The table above is the first result after those fixes, with nothing tuned on it.
+**What this shows, honestly.** The trading results are mixed. Every agent holds the same single index, long only, fully in or out, so in calm uptrends all of them track buy and hold and the differences are small. Almanac's clearest win is the 2022 bear. When no lesson is proven for today's conditions, Almanac decides from the raw signals alone, so in most of the 2020 crash and late 2018 it had nothing to lean on. The individual calls are still telling. On 2020-03-05 plain memory bought on a "buying a deeply oversold dip paid off" lesson that Almanac hid as unproven in crash conditions, and the market fell 18% over the next five days. On 2022-08-26, removing one lesson from Almanac's prompt flipped its answer from OUT (4 of 5 fresh runs) to IN (5 of 5). All results come from one sample per prompt plus seeded reruns on the presets (`python -m almanac.sweep summary`).
+
+**How we got here.** Two QA passes found the agents were following the 200-day average because the prompt told them what it meant, and that Almanac's gate had too little evidence to work (median 1 entry per lesson). We removed the signal interpretation from the prompt, rebuilt the evidence log to include rediscoveries and score each lesson's own recommendation, and restricted Almanac to lessons proven here. A first version defined "proven" as A ≥ 0.55. That let coin-flip lessons through, such as an "RSI overbought, wait for a pullback" lesson at 58% on 26 similar uses that kept pulling Almanac out of the 2019 rally. We replaced it with the 90% confidence bound. That fixed the calm-market exits (+13.0% → +19.7% in Feb 2019 - Feb 2020) and helped in the 2022 bear, but cost the crash results the weaker rule had (2020 crash +2.4% → −17.7%). The 12-window mean went from −0.29% to −2.30%. We kept the principled rule rather than tune further on these windows.
 
 ## Run it
 
@@ -155,5 +158,5 @@ Everything in this repo was built during the hackathon on 2026-11-14:
 - A Claude trading agent with a disguised prompt, four memory modes and safety checks (made-up lesson IDs dropped, bad output means no change).
 - Broker and outcome scoring. The learning run writes, merges, widens and retires lessons in transactions with a full event log.
 - The 4-agent demo engine (no memory, plain, plain + context, Almanac): position-independent daily targets precomputed for 2016-2024, a simulator with a 2-day confirmation rule and cost-drag accounting, a change stream on `market_state`, SSE replay in about 7 seconds for any window, the front end, metrics, a 12-window sweep and the counterfactual flip-rate test.
-- Two QA passes and the fixes they led to (neutral prompt, rebuilt evidence, recommendation-based scoring, proven-only gate).
-- 102 tests.
+- Two QA passes and the fixes they led to (neutral prompt, rebuilt evidence, recommendation-based scoring, proven-only gate with a confidence bound), plus a "vs buy and hold" view on the equity chart.
+- 103 tests. Demo script in `DEMO.md`.
